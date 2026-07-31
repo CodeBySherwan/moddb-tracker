@@ -71,8 +71,14 @@ every step.
 ## Phase 3 — Advanced (future)
 
 - Dashboard widget rearrangement, search across all data, achievements +
-  milestones timeline, compare two mods, AI insights ("downloads up 37% vs
-  last week"), hourly downloads, country stats, Steam-like profile.
+  milestones timeline, AI insights ("downloads up 37% vs last week"), hourly
+  downloads, country stats, Steam-like profile.
+
+### Phase 3 progress
+- **Compare two mods** ✅ `ComparePage` in `gui.py` + `analytics.aligned_totals`:
+  two mod selectors (auto-sync so A ≠ B), 30/60/90-day range, head-to-head
+  stats table (winner highlighted green), cumulative overlay chart, daily-gain
+  chart, and a "daily advantage" diff chart; PNG export.
 
 ## Architecture
 

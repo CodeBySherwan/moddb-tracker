@@ -72,6 +72,23 @@ def daily_totals_range(series: List[Tuple[Date, int]], days: int) -> List[Tuple[
     return out
 
 
+def aligned_totals(
+    series_a: List[Tuple[Date, int]], series_b: List[Tuple[Date, int]], days: int
+) -> List[Tuple[Date, int, int]]:
+    """(date, total_a, total_b) for every day in the window, both filled forward."""
+    start = datetime.date.today() - datetime.timedelta(days=days - 1)
+    by_a, by_b = dict(series_a), dict(series_b)
+    out: List[Tuple[Date, int, int]] = []
+    cur_a = cur_b = 0
+    day = start
+    while day <= datetime.date.today():
+        cur_a = by_a.get(day, cur_a)
+        cur_b = by_b.get(day, cur_b)
+        out.append((day, cur_a, cur_b))
+        day += datetime.timedelta(days=1)
+    return out
+
+
 def weekly_deltas(series: List[Tuple[Date, int]]) -> List[Tuple[Date, int]]:
     """Downloads gained per ISO week, keyed by the week start (Monday)."""
     by_week: Dict[Date, int] = {}
