@@ -1,0 +1,25 @@
+{
+  "profile_url": "https://www.moddb.com/members/YOUR-USERNAME",
+  "auto_discover": true,
+  "mods": [],
+  "poll": {
+    "interval_minutes": 30,
+    "notify_on_downloads": true,
+    "notify_on_comments": true,
+    "notify_on_replies": true,
+    "charts_each_poll": true
+  },
+  "notifications": {
+    "app_id": "ModDB Tracker",
+    "max_toasts": 5
+  },
+  "tray": {
+    "close_to_tray": true,
+    "start_minimized": false
+  },
+  "paths": {
+    "db": "tracker.db",
+    "output": "output",
+    "logs": "logs"
+  }
+}

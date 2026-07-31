@@ -1,0 +1,14 @@
+# runtime data
+tracker.db
+output/
+logs/
+config.json
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# generated assets
+tray_icon.png
