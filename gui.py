@@ -17,7 +17,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import QObject, QRect, QSize, QThread, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QAction, QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap
@@ -60,6 +60,7 @@ from storage import Storage
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import analytics  # noqa: E402
 import tracker  # noqa: E402
 from tracker import (  # noqa: E402  (imports depend on sys.path above)
     CONFIG_FILE,
@@ -69,9 +70,12 @@ from tracker import (  # noqa: E402  (imports depend on sys.path above)
     save_config,
 )
 
+import pyqtgraph as pg  # noqa: E402
+from pyqtgraph.exporters import ImageExporter  # noqa: E402
+
 logger = logging.getLogger("tracker.gui")
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 # --------------------------------------------------------------------------
 # palette (dark blue theme)
@@ -702,6 +706,357 @@ class ChartCard(QFrame):
         ))
 
 
+def _date_to_ts(d: datetime.date) -> float:
+    return datetime.datetime.combine(d, datetime.time()).timestamp()
+
+
+class PlotCard(QFrame):
+    """Panel with an interactive pyqtgraph chart and a hover readout line."""
+
+    def __init__(self, title: str, subtitle: str, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("Panel")
+        self._series: List[Dict[str, Any]] = []
+
+        head = QLabel(title)
+        head.setObjectName("SectionTitle")
+        sub = QLabel(subtitle)
+        sub.setObjectName("Caption")
+
+        self.plot = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem()})
+        self.plot.setBackground(CARD)
+        self.plot.setMinimumHeight(230)
+        pi = self.plot.getPlotItem()
+        pi.showGrid(x=True, y=True, alpha=0.18)
+        pi.setMouseEnabled(x=True, y=False)
+        for axis_name in ("left", "bottom"):
+            axis = pi.getAxis(axis_name)
+            axis.setPen(pg.mkPen(BORDER))
+            axis.setTextPen(pg.mkPen(FAINT))
+            try:
+                axis.setTickFont(QFont("Segoe UI", 9))
+            except Exception:  # noqa: BLE001
+                pass
+
+        self.info = QLabel("Hover for values  \u00b7  drag to zoom")
+        self.info.setObjectName("Caption")
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 12, 14, 10)
+        lay.setSpacing(8)
+        lay.addWidget(head)
+        lay.addWidget(sub)
+        lay.addWidget(self.plot, 1)
+        lay.addWidget(self.info)
+
+        self.plot.scene().sigMouseMoved.connect(self._on_hover)
+
+    # ---- drawing helpers ------------------------------------------------
+    def clear_chart(self) -> None:
+        self.plot.clear()
+        self._series = []
+
+    def set_ylabel(self, text: str) -> None:
+        self.plot.getPlotItem().setLabel("left", text)
+
+    def add_bars(self, dates, values, color: str) -> None:
+        ts = [_date_to_ts(d) for d in dates]
+        item = pg.BarGraphItem(
+            x=ts, height=values, width=86400 * 0.68,
+            brush=pg.mkBrush(color), pen=pg.mkPen(color),
+        )
+        self.plot.addItem(item)
+        self._series.append({"times": ts, "values": list(values), "labels": list(dates)})
+
+    def add_line(self, dates, values, color: str, width: int = 2, fill: bool = False) -> None:
+        ts = [_date_to_ts(d) for d in dates]
+        item = self.plot.plot(
+            ts, values, pen=pg.mkPen(color, width=width), antialias=True,
+        )
+        if fill:
+            item.setFillLevel(0)
+            brush = QColor(color)
+            brush.setAlpha(45)
+            item.setBrush(pg.mkBrush(brush))
+        self._series.append({"times": ts, "values": list(values), "labels": list(dates)})
+
+    def add_milestone(self, date: datetime.date, threshold: int) -> None:
+        ts = _date_to_ts(date)
+        self.plot.addItem(pg.InfiniteLine(
+            pos=ts, angle=90, pen=pg.mkPen(WARNING, width=1, style=Qt.PenStyle.DashLine),
+        ))
+        text = pg.TextItem(f"{threshold:,}", color=WARNING, anchor=(1, 1))
+        text.setPos(ts, threshold)
+        self.plot.addItem(text)
+
+    def _on_hover(self, pos) -> None:
+        vb = self.plot.getPlotItem().getViewBox()
+        if not vb.sceneBoundingRect().contains(pos):
+            return
+        mouse = vb.mapSceneToView(pos)
+        x = mouse.x()
+        best = None
+        best_dist = None
+        for entry in self._series:
+            times = entry["times"]
+            if not times:
+                continue
+            idx = min(range(len(times)), key=lambda i: abs(times[i] - x))
+            dist = abs(times[idx] - x)
+            if best_dist is None or dist < best_dist:
+                best_dist = dist
+                best = (entry, idx)
+        if best is None:
+            self.info.setText("")
+            return
+        entry, idx = best
+        label = entry["labels"][idx]
+        if isinstance(label, datetime.date):
+            label = label.strftime("%Y-%m-%d")
+        self.info.setText(f"{label}   \u2192   {entry['values'][idx]:,}")
+
+
+class AnalyticsPage(QWidget):
+    """Interactive downloads analytics: pyqtgraph charts with zoom, hover, export."""
+
+    LINE_COLORS = [ACCENT, SUCCESS, WARNING, "#A78BFA", "#38BDF8", "#F472B6", "#FB923C", "#34D399"]
+
+    def __init__(self, config: Dict[str, Any], config_path: str = CONFIG_FILE, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._config = config
+        self._config_path = config_path
+        self._storage: Optional[Storage] = None
+        self._summaries: List[Dict[str, Any]] = []
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        title = QLabel("Analytics")
+        title.setObjectName("PageTitle")
+        layout.addWidget(title)
+        hint = QLabel("Interactive downloads analytics \u2014 hover a chart for values, drag to zoom.")
+        hint.setObjectName("Hint")
+        layout.addWidget(hint)
+
+        controls = QHBoxLayout()
+        controls.setSpacing(10)
+        controls.addWidget(QLabel("Mod:"))
+        self.mod_combo = QComboBox()
+        self.mod_combo.setMinimumWidth(240)
+        self.mod_combo.currentIndexChanged.connect(self._mod_changed)
+        controls.addWidget(self.mod_combo)
+        controls.addWidget(QLabel("Range:"))
+        self.days_combo = QComboBox()
+        for n in (30, 60, 90):
+            self.days_combo.addItem(f"Last {n} days", n)
+        self.days_combo.setCurrentIndex(self._default_days_index())
+        self.days_combo.currentIndexChanged.connect(self._days_changed)
+        controls.addWidget(self.days_combo)
+        controls.addStretch(1)
+        self.export_btn = QPushButton("Export charts\u2026")
+        self.export_btn.clicked.connect(self._export_charts)
+        controls.addWidget(self.export_btn)
+        layout.addLayout(controls)
+
+        cards = QHBoxLayout()
+        cards.setSpacing(12)
+        self.stat_total = StatCard("Total downloads")
+        self.stat_7d = StatCard("Last 7 days")
+        self.stat_30d = StatCard("Last 30 days")
+        self.stat_next = StatCard("Next 7 days (est.)")
+        for c in (self.stat_total, self.stat_7d, self.stat_30d, self.stat_next):
+            cards.addWidget(c, 1)
+        layout.addLayout(cards)
+
+        self.highlights = QFrame()
+        self.highlights.setObjectName("Panel")
+        self.highlights_label = QLabel("")
+        self.highlights_label.setWordWrap(True)
+        hl = QHBoxLayout(self.highlights)
+        hl.setContentsMargins(14, 10, 14, 10)
+        hl.addWidget(self.highlights_label)
+        layout.addWidget(self.highlights)
+
+        grid = QGridLayout()
+        grid.setSpacing(12)
+        self.plot_daily = PlotCard("Downloads per day", "Bars: daily gain   \u00b7   line: 7-day average")
+        self.plot_cum = PlotCard("Cumulative downloads", "Total downloads over time")
+        self.plot_weekly = PlotCard("Weekly downloads", "Downloads gained per ISO week")
+        grid.addWidget(self.plot_daily, 0, 0)
+        grid.addWidget(self.plot_cum, 0, 1)
+        grid.addWidget(self.plot_weekly, 1, 0, 1, 2)
+        layout.addLayout(grid, 1)
+
+        self.placeholder = QLabel("No data yet. Run a poll to start collecting download history.")
+        self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.placeholder.setObjectName("Hint")
+        self.placeholder.setMinimumHeight(160)
+        layout.addWidget(self.placeholder)
+
+    def _default_days_index(self) -> int:
+        days = int(self._config.get("ui", {}).get("analytics_days", 60))
+        idx = self.days_combo.findData(days)
+        return idx if idx >= 0 else 1
+
+    # ---- refresh --------------------------------------------------------
+    def refresh(self, storage: Storage) -> None:
+        self._storage = storage
+        days = int(self.days_combo.currentData() or 60)
+        self._summaries = analytics.all_mods_summary(storage, days)
+        current = self.mod_combo.currentData()
+        self.mod_combo.blockSignals(True)
+        self.mod_combo.clear()
+        self.mod_combo.addItem("All tracked mods", None)
+        for s in self._summaries:
+            self.mod_combo.addItem(s["name"], s["mod_id"])
+        if current is not None:
+            idx = self.mod_combo.findData(current)
+            if idx >= 0:
+                self.mod_combo.setCurrentIndex(idx)
+        self.mod_combo.blockSignals(False)
+        self._update()
+
+    def _days_changed(self) -> None:
+        try:
+            self._config.setdefault("ui", {})["analytics_days"] = int(self.days_combo.currentData() or 60)
+            save_config(self._config, self._config_path)
+        except Exception:  # noqa: BLE001
+            pass
+        if self._storage is not None:
+            self.refresh(self._storage)
+
+    def _mod_changed(self) -> None:
+        self._update()
+
+    # ---- rendering ------------------------------------------------------
+    def _update(self) -> None:
+        has = bool(self._summaries)
+        self.placeholder.setVisible(not has)
+        self.highlights.setVisible(has)
+        for card in (self.plot_daily, self.plot_cum, self.plot_weekly):
+            card.clear_chart()
+        if not has:
+            for s in (self.stat_total, self.stat_7d, self.stat_30d, self.stat_next):
+                s.set_text("—")
+            return
+
+        sel = self.mod_combo.currentData()
+        if sel is None:
+            self._update_all()
+        else:
+            self._update_mod(sel)
+
+    def _fill_cards(self, total: int, d7: int, d30: int, nxt: Optional[int]) -> None:
+        self.stat_total.set_value(total, f"last 30 days: +{d30:,}", SUCCESS if d30 else GRAY)
+        self.stat_7d.set_text(f"{d7:,}", "last 7 days", SUCCESS)
+        self.stat_30d.set_text(f"{d30:,}", "last 30 days", SUCCESS)
+        if nxt:
+            self.stat_next.set_text(f"{nxt:,}", "linear projection", ACCENT)
+        else:
+            self.stat_next.set_text("—", "not enough data", GRAY)
+
+    def _highlights_line(self, parts: List[str]) -> None:
+        self.highlights_label.setText("  \u00b7  ".join(parts))
+        self.highlights_label.setStyleSheet(f"color: {GRAY}; font-size: 12px;")
+
+    def _update_all(self) -> None:
+        agg = analytics.aggregate_summary(self._summaries)
+        self._fill_cards(agg["total"], agg["delta_7d"], agg["delta_30d"], agg["next_week"])
+
+        top = self._summaries[0]
+        fastest = max(self._summaries, key=lambda s: s["delta_7d"]) if self._summaries else None
+        ranked = ", ".join(f"{i + 1}. {s['name']} ({s['total']:,})" for i, s in enumerate(self._summaries[:3]))
+        parts = [f"{agg['count']} tracked mods",
+                 f"top: {top['name']} ({top['total']:,})",
+                 f"fastest 7d: {fastest['name']} (+{fastest['delta_7d']:,})" if fastest else None,
+                 f"ranking: {ranked}"]
+        self._highlights_line([p for p in parts if p])
+
+        today = datetime.date.today()
+        days = int(self.days_combo.currentData() or 60)
+        start = today - datetime.timedelta(days=days - 1)
+
+        # daily deltas summed across mods
+        agg_daily: Dict[datetime.date, int] = {}
+        for s in self._summaries:
+            for d, v in s["deltas"]:
+                agg_daily[d] = agg_daily.get(d, 0) + v
+        dailies = sorted(agg_daily.items())
+        self.plot_daily.set_ylabel("Downloads")
+        if dailies:
+            self.plot_daily.add_bars(*zip(*dailies), ACCENT)
+            ma = analytics.moving_average(dailies, 7)
+            self.plot_daily.add_line(*zip(*ma), "#38BDF8", width=2)
+
+        # cumulative per mod, aligned to the same window
+        for i, s in enumerate(self._summaries):
+            series = [p for p in s["series"] if p[0] >= start]
+            totals = analytics.daily_totals_range(series, days)
+            color = self.LINE_COLORS[i % len(self.LINE_COLORS)]
+            self.plot_cum.add_line(*zip(*totals), color, width=2)
+        self.plot_cum.set_ylabel("Total downloads")
+
+        # weekly totals across mods
+        weeks: Dict[datetime.date, int] = {}
+        for s in self._summaries:
+            for d, v in s["weeks"]:
+                weeks[d] = weeks.get(d, 0) + v
+        wk = sorted(weeks.items())
+        self.plot_weekly.set_ylabel("Downloads")
+        if wk:
+            self.plot_weekly.add_bars(*zip(*wk), SUCCESS)
+
+    def _update_mod(self, mod_id: int) -> None:
+        s = next((x for x in self._summaries if x["mod_id"] == mod_id), None)
+        if s is None:
+            return
+        self._fill_cards(s["total"], s["delta_7d"], s["delta_30d"], s["next_week_estimate"])
+
+        parts = [f"first seen: {s['first_seen']}",
+                 f"best day: {s['best_day']['label']} (+{s['best_day']['value']:,})" if s["best_day"] else None,
+                 f"best week: {s['best_week']['label']} (+{s['best_week']['value']:,})" if s["best_week"] else None,
+                 f"avg/day: {s['avg_per_day']}"]
+        if s["milestones"]:
+            ms = ", ".join(f"{m['threshold']:,} ({m['date']})" for m in s["milestones"])
+            parts.append(f"milestones: {ms}")
+        else:
+            parts.append("milestones: none reached in range")
+        self._highlights_line([p for p in parts if p])
+
+        self.plot_daily.set_ylabel("Downloads")
+        if s["deltas"]:
+            self.plot_daily.add_bars(*zip(*s["deltas"]), ACCENT)
+            self.plot_daily.add_line(*zip(*s["ma7"]), "#38BDF8", width=2)
+
+        totals = analytics.daily_totals_range(s["series"], s["days"])
+        self.plot_cum.set_ylabel("Total downloads")
+        self.plot_cum.add_line(*zip(*totals), ACCENT, width=2, fill=True)
+        for m in s["milestones"]:
+            self.plot_cum.add_milestone(m["date"], m["threshold"])
+
+        self.plot_weekly.set_ylabel("Downloads")
+        if s["weeks"]:
+            self.plot_weekly.add_bars(*zip(*s["weeks"]), SUCCESS)
+
+    # ---- export ---------------------------------------------------------
+    def _export_charts(self) -> None:
+        dir_path = QFileDialog.getExistingDirectory(self, "Choose a folder for chart PNGs")
+        if not dir_path:
+            return
+        try:
+            written = []
+            for slug, card in (("daily", self.plot_daily), ("cumulative", self.plot_cum), ("weekly", self.plot_weekly)):
+                path = Path(dir_path) / f"analytics_{slug}.png"
+                exporter = ImageExporter(card.plot.getPlotItem())
+                exporter.parameters()["width"] = 1200
+                exporter.export(str(path))
+                written.append(path.name)
+            QMessageBox.information(self, "Charts exported", "Saved:\n" + "\n".join(written))
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Export failed", str(exc))
+
+
 class ActivityFeed(QFrame):
     """Sidebar panel listing recent download / comment events."""
 
@@ -985,6 +1340,7 @@ class ModCard(QFrame):
 # --------------------------------------------------------------------------
 
 class DashboardPage(QWidget):
+    regen_requested = pyqtSignal()
     SKIP_CHARTS = {"dashboard.png"}
     CHART_ORDER = [
         "downloads_per_day.png",
@@ -1051,7 +1407,13 @@ class DashboardPage(QWidget):
         wl = QVBoxLayout(wrap)
         wl.setContentsMargins(0, 0, 0, 0)
         wl.setSpacing(8)
-        wl.addWidget(section_label("Charts"))
+        chart_header = QHBoxLayout()
+        chart_header.addWidget(section_label("Charts"))
+        chart_header.addStretch(1)
+        self.regen_btn = QPushButton("Regenerate charts")
+        self.regen_btn.clicked.connect(self._request_regen)
+        chart_header.addWidget(self.regen_btn)
+        wl.addLayout(chart_header)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -1073,6 +1435,9 @@ class DashboardPage(QWidget):
             self._update_stats(storage)
             self.activity.refresh(storage)
         self._reload_charts()
+
+    def _request_regen(self) -> None:
+        self.regen_requested.emit()
 
     def reload(self) -> None:
         self._reload_charts()
@@ -1159,12 +1524,17 @@ class ModsPage(QWidget):
     remove_requested = pyqtSignal(str)
     export_requested = pyqtSignal()
 
-    def __init__(self, config: Dict[str, Any], parent: Optional[QWidget] = None) -> None:
+    def __init__(self, config: Dict[str, Any], config_path: str = CONFIG_FILE, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._config = config
+        self._config_path = config_path
         self._cards: List[ModCard] = []
-        self._filter = ""
-        self._sort = 0
+        self._filter = str(config.get("ui", {}).get("mods_filter", ""))
+        self._sort = int(config.get("ui", {}).get("mods_sort", 0))
+        self._prefs_timer = QTimer(self)
+        self._prefs_timer.setSingleShot(True)
+        self._prefs_timer.setInterval(400)
+        self._prefs_timer.timeout.connect(self._save_ui_prefs)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1191,9 +1561,12 @@ class ModsPage(QWidget):
         self.search.setClearButtonEnabled(True)
         self.search.setFixedWidth(260)
         self.search.textChanged.connect(self.apply_filter)
+        if self._filter:
+            self.search.setText(self._filter)
         self.sort_combo = QComboBox()
         self.sort_combo.addItems(["Sort: Downloads", "Sort: Today", "Sort: 7-day growth", "Sort: Name", "Sort: Favorites first"])
-        self.sort_combo.currentIndexChanged.connect(lambda _: self._rebuild())
+        self.sort_combo.setCurrentIndex(self._sort)
+        self.sort_combo.currentIndexChanged.connect(self._sort_changed)
         self.export_btn = QPushButton("Export JSON\u2026")
         self.export_btn.clicked.connect(self.export_requested.emit)
         toolbar.addWidget(self.search)
@@ -1220,6 +1593,19 @@ class ModsPage(QWidget):
         self.placeholder.setObjectName("Hint")
         self.placeholder.setMinimumHeight(220)
         layout.addWidget(self.placeholder)
+
+    def _sort_changed(self, index: int) -> None:
+        self._sort = index
+        self._rebuild()
+        self._save_ui_prefs()
+
+    def _save_ui_prefs(self) -> None:
+        try:
+            self._config.setdefault("ui", {})["mods_sort"] = self._sort
+            self._config["ui"]["mods_filter"] = self._filter
+            save_config(self._config, self._config_path)
+        except Exception:  # noqa: BLE001
+            pass
 
     def refresh(self, storage: Storage) -> None:
         self._rebuild(storage)
@@ -1301,6 +1687,7 @@ class ModsPage(QWidget):
     def apply_filter(self, text: str) -> None:
         self._filter = text
         self._apply_filter()
+        self._prefs_timer.start()
         if self.count_label.text():
             self.count_label.setText(f"{len(self._cards)} tracked" + ("  ·  matches filter" if text.strip() else ""))
 
@@ -1514,20 +1901,31 @@ class CommentsPage(QWidget):
 
 
 class EventsPage(QWidget):
+    """Notification center: unseen highlighting, kind filter, mark-as-read, open on ModDB."""
+
+    open_url = pyqtSignal(str)
+    events_read = pyqtSignal()
+
+    KIND_LABELS = {"download": "Downloads", "comment": "Comments", "reply": "Replies"}
+    KIND_STYLE = {"download": ("⬇", SUCCESS), "comment": ("💬", ACCENT), "reply": ("↩", WARNING)}
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._filter = ""
-        self._rows: List[List[Any]] = []
+        self._kind = ""
+        self._rows: List[Dict[str, Any]] = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
         title = QLabel("Notifications")
         title.setObjectName("PageTitle")
         layout.addWidget(title)
-        hint = QLabel("Download and comment events detected by polls.")
+        hint = QLabel("Download and comment events detected by polls. Double-click a row to open it on ModDB.")
         hint.setObjectName("Hint")
         layout.addWidget(hint)
 
         toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
         self.search = QLineEdit()
         self.search.setObjectName("Search")
         self.search.setPlaceholderText("Search events\u2026")
@@ -1535,11 +1933,24 @@ class EventsPage(QWidget):
         self.search.setFixedWidth(240)
         self.search.textChanged.connect(lambda _: self._apply_filter())
         toolbar.addWidget(self.search)
+        self.kind_combo = QComboBox()
+        self.kind_combo.addItem("All kinds", "")
+        self.kind_combo.addItem("Downloads", "download")
+        self.kind_combo.addItem("Comments", "comment")
+        self.kind_combo.addItem("Replies", "reply")
+        self.kind_combo.currentIndexChanged.connect(lambda _: self._apply_filter())
+        toolbar.addWidget(self.kind_combo)
         toolbar.addStretch(1)
+        self.mark_read_btn = QPushButton("Mark all read")
+        self.mark_read_btn.clicked.connect(self.mark_all_seen)
+        toolbar.addWidget(self.mark_read_btn)
         layout.addLayout(toolbar)
 
         self.table = make_table(["Time", "Kind", "Mod", "Message"])
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._context_menu)
+        self.table.itemDoubleClicked.connect(lambda _: self._open_selected())
         layout.addWidget(self.table, 1)
         self.placeholder = QLabel("No events yet. Run a poll to start recording activity.")
         self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1548,22 +1959,93 @@ class EventsPage(QWidget):
         layout.addWidget(self.placeholder)
 
     def refresh(self, storage: Storage) -> None:
-        rows: List[List[Any]] = []
+        self._storage = storage
+        rows: List[Dict[str, Any]] = []
         for e in storage.recent_events(200):
-            rows.append([e["created_at"], e["kind"], e["mod_name"] or "-", e["message"]])
+            rows.append({
+                "id": e["id"],
+                "created_at": e["created_at"],
+                "kind": e["kind"],
+                "mod_name": e["mod_name"] or "-",
+                "message": e["message"],
+                "url": e["url"] or "",
+                "seen": bool(e["seen"]),
+            })
         self._rows = rows
         self._apply_filter()
+
+    def mark_all_seen(self) -> None:
+        storage = getattr(self, "_storage", None)
+        if storage is not None:
+            storage.mark_events_seen()
+        for r in self._rows:
+            r["seen"] = True
+        self._apply_filter()
+        self.events_read.emit()
 
     def apply_filter(self, text: str) -> None:
         self.search.setText(text)
         self._apply_filter()
 
+    def _mark_all_read(self) -> None:
+        self.mark_all_seen()
+
+    def _open_selected(self) -> None:
+        row = self.table.currentRow()
+        if 0 <= row < len(self._displayed):
+            url = self._displayed[row].get("url")
+            if url:
+                self.open_url.emit(url)
+
+    def _context_menu(self, pos) -> None:
+        row = self.table.rowAt(pos.y())
+        if row < 0 or row >= len(self._displayed):
+            return
+        entry = self._displayed[row]
+        menu = QMenu(self)
+        if entry.get("url"):
+            open_act = QAction("Open on ModDB", self)
+            open_act.triggered.connect(lambda: self.open_url.emit(entry["url"]))
+            menu.addAction(open_act)
+            copy_act = QAction("Copy URL", self)
+            copy_act.triggered.connect(lambda: QApplication.clipboard().setText(entry["url"]))
+            menu.addAction(copy_act)
+            menu.addSeparator()
+        mark_act = QAction("Mark all read", self)
+        mark_act.triggered.connect(self._mark_all_read)
+        menu.addAction(mark_act)
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
     def _apply_filter(self) -> None:
         needle = self.search.text().strip().lower()
-        out = self._rows
-        if needle:
-            out = [r for r in out if needle in f"{r[1]} {r[2]} {r[3]}".lower()]
-        fill_table(self.table, out)
+        self._kind = self.kind_combo.currentData() or ""
+        out = []
+        for r in self._rows:
+            if self._kind and r["kind"] != self._kind:
+                continue
+            if needle and needle not in f"{r['kind']} {r['mod_name']} {r['message']}".lower():
+                continue
+            out.append(r)
+        self._displayed = out
+
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(len(out))
+        for r, entry in enumerate(out):
+            icon, color = self.KIND_STYLE.get(entry["kind"], ("•", GRAY))
+            kind_label = self.KIND_LABELS.get(entry["kind"], entry["kind"].title())
+            cells = [entry["created_at"], f"{icon} {kind_label}", entry["mod_name"], entry["message"]]
+            for c, value in enumerate(cells):
+                item = QTableWidgetItem(str(value))
+                if not entry["seen"]:
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
+                    item.setForeground(QColor(TEXT))
+                if c == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, entry["created_at"])
+                self.table.setItem(r, c, item)
+        self.table.resizeColumnsToContents()
+
         self.placeholder.setVisible(not self._rows)
         self.table.setVisible(bool(self._rows))
 
@@ -1859,6 +2341,7 @@ class TrackerWindow(QMainWindow):
     NAV = [
         ("Dashboard", "🏠"),
         ("My Mods", "📦"),
+        ("Analytics", "📊"),
         ("History", "📈"),
         ("Comments", "💬"),
         ("Notifications", "🔔"),
@@ -1922,13 +2405,14 @@ class TrackerWindow(QMainWindow):
 
         self.stack = QStackedWidget()
         self.dashboard = DashboardPage(self.config)
-        self.mods = ModsPage(self.config)
+        self.mods = ModsPage(self.config, self.config_path)
+        self.analytics = AnalyticsPage(self.config, self.config_path)
         self.history = HistoryPage()
         self.comments = CommentsPage()
         self.events = EventsPage()
         self.log_page = LogPage()
         self.settings = SettingsPage(self.config)
-        for page in (self.dashboard, self.mods, self.history, self.comments, self.events, self.settings, self.log_page):
+        for page in (self.dashboard, self.mods, self.analytics, self.history, self.comments, self.events, self.settings, self.log_page):
             self.stack.addWidget(page)
         self.settings.saved.connect(self._on_settings_saved)
         self.settings.file_reload.connect(self._on_settings_saved)
@@ -1936,7 +2420,10 @@ class TrackerWindow(QMainWindow):
         self.mods.refresh_requested.connect(self._refresh_mod)
         self.mods.favorite_toggled.connect(self._toggle_favorite)
         self.mods.remove_requested.connect(self._remove_mod)
-        self.mods.export_requested.connect(self._export_all)
+        self.mods.export_requested.connect(self._export_json)
+        self.dashboard.regen_requested.connect(self._regenerate_charts)
+        self.events.open_url.connect(self._open_url)
+        self.events.events_read.connect(self._update_badge)
         body.addWidget(self.stack, 1)
         root.addLayout(body, 1)
 
@@ -1973,13 +2460,42 @@ class TrackerWindow(QMainWindow):
         self.search_box.setObjectName("Search")
         self.search_box.setPlaceholderText("Search mods, comments, events\u2026")
         self.search_box.setClearButtonEnabled(True)
-        self.search_box.setFixedWidth(280)
+        self.search_box.setFixedWidth(240)
         self.search_box.textChanged.connect(self._search_changed)
         h.addWidget(self.search_box)
 
         self.sync_label = QLabel("Not synced")
         self.sync_label.setStyleSheet(f"color: {GRAY}; font-size: 12px;")
         h.addWidget(self.sync_label)
+
+        self.bell_btn = QToolButton()
+        self.bell_btn.setText("🔔")
+        self.bell_btn.setToolTip("Notifications")
+        self.bell_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.bell_btn.clicked.connect(self._show_notifications)
+        h.addWidget(self.bell_btn)
+        self.badge = QLabel("")
+        self.badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.badge.setMinimumWidth(18)
+        self.badge.setStyleSheet(
+            f"background: {ERROR}; color: #FFFFFF; font-size: 10px; font-weight: 700;"
+            "border-radius: 9px; padding: 0 5px;"
+        )
+        self.badge.setVisible(False)
+        h.addWidget(self.badge)
+
+        self.export_btn = QToolButton()
+        self.export_btn.setText("Export \u25be")
+        self.export_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.export_btn.setToolTip("Export reports")
+        export_menu = QMenu(self)
+        export_menu.addAction("CSV\u2026", self._export_csv)
+        export_menu.addAction("Excel (.xlsx)\u2026", self._export_xlsx)
+        export_menu.addAction("PDF report\u2026", self._export_pdf)
+        export_menu.addSeparator()
+        export_menu.addAction("JSON\u2026", self._export_json)
+        self.export_btn.setMenu(export_menu)
+        h.addWidget(self.export_btn)
 
         self.poll_btn = QPushButton("Poll now")
         self.poll_btn.setObjectName("Primary")
@@ -1988,7 +2504,7 @@ class TrackerWindow(QMainWindow):
         self.rescan_btn.clicked.connect(self._rescan)
         self.charts_btn = QPushButton("Charts")
         self.charts_btn.clicked.connect(self._regenerate_charts)
-        self.refresh_btn = QPushButton("⟳ Refresh")
+        self.refresh_btn = QPushButton("Refresh")
         self.refresh_btn.clicked.connect(self.refresh_all)
         h.addWidget(self.poll_btn)
         h.addWidget(self.rescan_btn)
@@ -2009,6 +2525,8 @@ class TrackerWindow(QMainWindow):
 
     def _nav_changed(self, row: int) -> None:
         self.stack.setCurrentIndex(row)
+        if self.stack.currentWidget() is self.events:
+            self.events.mark_all_seen()
 
     # ---- system tray ----------------------------------------------------
     def _build_tray(self) -> None:
@@ -2092,10 +2610,12 @@ class TrackerWindow(QMainWindow):
     def refresh_all(self) -> None:
         self.dashboard.refresh(self.storage)
         self.mods.refresh(self.storage)
+        self.analytics.refresh(self.storage)
         self.history.refresh(self.storage)
         self.comments.refresh(self.storage)
         self.events.refresh(self.storage)
         self.settings.reload()
+        self._update_badge()
 
         member = self.storage.meta_get("member_name") or ""
         last = self.storage.meta_get("last_poll") or ""
@@ -2117,6 +2637,7 @@ class TrackerWindow(QMainWindow):
         self.storage = Storage(self.config["paths"]["db"])
         self.dashboard._config = self.config
         self.mods._config = self.config
+        self.analytics._config = self.config
         self._restart_auto_timer()
         self.refresh_all()
 
@@ -2130,9 +2651,23 @@ class TrackerWindow(QMainWindow):
         self.rescan_btn.setEnabled(not busy)
         self.charts_btn.setEnabled(not busy)
         self.refresh_btn.setEnabled(not busy)
+        self.export_btn.setEnabled(not busy)
+        self.dashboard.regen_btn.setEnabled(not busy)
         self.busy_bar.setVisible(busy)
         if busy:
             self.set_status(label or "Working...")
+
+    def _update_badge(self) -> None:
+        count = self.storage.count_unseen()
+        self.badge.setText(f"{count}" if count < 100 else "99+")
+        self.badge.setVisible(count > 0)
+        self.bell_btn.setToolTip(f"{count} new notification(s)" if count else "Notifications")
+
+    def _show_notifications(self) -> None:
+        row = next(i for i, (name, _) in enumerate(self.NAV) if name == "Notifications")
+        self.sidebar.setCurrentRow(row)
+        self.stack.setCurrentIndex(row)
+        self.events.mark_all_seen()
 
     def set_status(self, text: str) -> None:
         self.status_label.setText(text)
@@ -2213,16 +2748,201 @@ class TrackerWindow(QMainWindow):
             self.storage.set_mod_active(name_id, False)
             self.refresh_all()
 
-    def _export_all(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Export data", "moddb_tracker_export.json", "JSON (*.json)")
+    def _pick_save_path(self, title: str, default: str, flt: str) -> Optional[str]:
+        path, _ = QFileDialog.getSaveFileName(self, title, default, flt)
+        return path or None
+
+    def _readonly_storage(self) -> Storage:
+        return Storage(self.config["paths"]["db"])
+
+    def _export_json(self) -> None:
+        path = self._pick_save_path("Export data", "moddb_tracker_export.json", "JSON (*.json)")
         if not path:
             return
         try:
-            storage = Storage(self.config["paths"]["db"])
+            storage = self._readonly_storage()
             try:
                 storage.export_json(path)
             finally:
                 storage.close()
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Export failed", str(exc))
+
+    def _export_csv(self) -> None:
+        directory = QFileDialog.getExistingDirectory(self, "Choose a folder for CSV export")
+        if not directory:
+            return
+        try:
+            storage = self._readonly_storage()
+            try:
+                meta = {int(m["id"]): dict(m) for m in storage.get_mods(active_only=True)}
+                csv_rows = []
+                for m in storage.totals_per_mod():
+                    mid = int(m["id"])
+                    csv_rows.append([m["name"], m["downloads_total"], m["downloads_today"], m["visits"],
+                                     m["watchers"], m["rating"], m["rank"],
+                                     meta.get(mid, {}).get("content_type", "mod")])
+                self._write_csv_rows(Path(directory) / "mods.csv",
+                                     ["Name", "Downloads", "Today", "Visits", "Watchers", "Rating", "Rank", "Content type"],
+                                     csv_rows)
+                self._write_csv_rows(Path(directory) / "comments.csv",
+                                     ["Posted", "Mod", "Author", "Text"],
+                                     [list(r) for r in self._comment_list(storage)])
+                self._write_csv_rows(Path(directory) / "events.csv",
+                                     ["Time", "Kind", "Mod", "Message"],
+                                     [[e["created_at"], e["kind"], e["mod_name"], e["message"]] for e in storage.recent_events(500)])
+                self._write_csv_rows(Path(directory) / "history.csv",
+                                     ["Mod", "Time", "Downloads", "Visits", "Watchers"],
+                                     [[m["name"], s["fetched_at"], s["downloads_total"],
+                                       s["visits"], s["watchers"]]
+                                      for m in storage.get_mods(active_only=True)
+                                      for s in storage.snapshots_for(int(m["id"]))][-2000:])
+            finally:
+                storage.close()
+            QMessageBox.information(self, "CSV export", "Saved to:\n" + str(directory))
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Export failed", str(exc))
+
+    @staticmethod
+    def _comment_list(storage) -> List[Tuple[str, str, str, Any]]:
+        mod_names = {int(m["id"]): m["name"] for m in storage.get_mods(active_only=False)}
+        return [(c["posted_at"], mod_names.get(int(c["mod_id"]), "-"), c["author"], c["content"])
+                for c in storage.recent_comments(500)]
+
+    @staticmethod
+    def _write_csv_rows(path: Path, headers: List[str], rows: List[List[Any]]) -> None:
+        import csv
+
+        with open(str(path), "w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(headers)
+            writer.writerows(rows)
+
+    def _export_xlsx(self) -> None:
+        path = self._pick_save_path("Export to Excel", "moddb_tracker.xlsx", "Excel (*.xlsx)")
+        if not path:
+            return
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill
+
+            storage = self._readonly_storage()
+            try:
+                wb = Workbook()
+                wb.remove(wb.active)
+                header_font = Font(bold=True, color="FFFFFF")
+                header_fill = PatternFill("solid", fgColor="3B82F6")
+                meta = {int(m["id"]): dict(m) for m in storage.get_mods(active_only=True)}
+                xlsx_mods = []
+                for m in storage.totals_per_mod():
+                    mid = int(m["id"])
+                    xlsx_mods.append([m["name"], m["downloads_total"], m["downloads_today"], m["visits"], m["watchers"],
+                                      m["rating"], m["rank"], meta.get(mid, {}).get("content_type", "mod")])
+                sections = {
+                    "Mods": (["Name", "Downloads", "Today", "Visits", "Watchers", "Rating", "Rank", "Content type"],
+                             xlsx_mods),
+                    "Comments": (["Posted", "Mod", "Author", "Text"],
+                                 [list(r) for r in self._comment_list(storage)]),
+                    "Events": (["Time", "Kind", "Mod", "Message"],
+                               [[e["created_at"], e["kind"], e["mod_name"], e["message"]] for e in storage.recent_events(500)]),
+                    "History": (["Mod", "Time", "Downloads", "Visits", "Watchers"],
+                                [[m["name"], s["fetched_at"], s["downloads_total"],
+                                  s["visits"], s["watchers"]]
+                                 for m in storage.get_mods(active_only=True)
+                                 for s in storage.snapshots_for(int(m["id"]))][-2000:]),
+                }
+                for name, (headers, rows) in sections.items():
+                    ws = wb.create_sheet(name)
+                    ws.append(headers)
+                    for cell in ws[1]:
+                        cell.font = header_font
+                        cell.fill = header_fill
+                    for row in rows:
+                        ws.append(row)
+                    for col, _ in enumerate(headers, start=1):
+                        ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = max(12, min(45, len(str(headers[col - 1])) + 2))
+                wb.save(path)
+            finally:
+                storage.close()
+            QMessageBox.information(self, "Excel export", f"Saved to:\n{path}")
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Export failed", str(exc))
+
+    def _export_pdf(self) -> None:
+        path = self._pick_save_path("Export PDF report", "moddb_tracker_report.pdf", "PDF (*.pdf)")
+        if not path:
+            return
+        try:
+            from reportlab.lib import colors
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+            from reportlab.lib.units import mm
+            from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+            storage = self._readonly_storage()
+            try:
+                summary = analytics.all_mods_summary(storage, 30)
+                member = storage.meta_get("member_name") or "—"
+                last_poll = storage.meta_get("last_poll") or "—"
+
+                styles = getSampleStyleSheet()
+                title_style = ParagraphStyle("TitleX", parent=styles["Title"], fontSize=20, textColor=colors.HexColor("#0F172A"))
+                body = ParagraphStyle("BodyX", parent=styles["BodyText"], fontSize=9, leading=12)
+                small = ParagraphStyle("SmallX", parent=styles["BodyText"], fontSize=8, textColor=colors.HexColor("#64748B"))
+
+                doc = SimpleDocTemplate(path, pagesize=A4, rightMargin=18 * mm, leftMargin=18 * mm,
+                                        topMargin=18 * mm, bottomMargin=18 * mm, title="ModDB Tracker report")
+                story = [Paragraph("ModDB Tracker — weekly report", title_style),
+                         Spacer(1, 4),
+                         Paragraph(f"Member: {member} &nbsp;&nbsp;|&nbsp;&nbsp; Last poll: {last_poll} &nbsp;&nbsp;|&nbsp;&nbsp; "
+                                   f"Generated: {datetime.datetime.now():%Y-%m-%d %H:%M}", small),
+                         Spacer(1, 10)]
+
+                agg = analytics.aggregate_summary(summary)
+                story.append(Paragraph(
+                    f"<b>Aggregate</b> — {agg['count']} tracked mods, {agg['total']:,} total downloads, "
+                    f"<b>+{agg['delta_7d']:,}</b> in the last 7 days, <b>+{agg['delta_30d']:,}</b> in 30, "
+                    f"~<b>{agg['next_week']:,}</b> projected for next week.", body))
+                story.append(Spacer(1, 8))
+
+                rows = [["Mod", "Total", "7d", "30d", "Avg/day", "Best day", "Next week"]]
+                for s in summary:
+                    best = s["best_day"]["label"] if s["best_day"] else "—"
+                    nxt = f"{s['next_week_estimate']:,}" if s["next_week_estimate"] else "—"
+                    rows.append([Paragraph(s["name"], body), f"{s['total']:,}", f"+{s['delta_7d']:,}",
+                                 f"+{s['delta_30d']:,}", f"{s['avg_per_day']}", best, nxt])
+                table = Table(rows, colWidths=[70 * mm, 22 * mm, 18 * mm, 18 * mm, 20 * mm, 28 * mm, 22 * mm], repeatRows=1)
+                table.setStyle(TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 8),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F1F5F9")]),
+                    ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#CBD5E1")),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ]))
+                story.append(table)
+                story.append(Spacer(1, 10))
+
+                comments = self._comment_list(storage)
+                if comments:
+                    story.append(Paragraph("<b>Recent comments</b>", body))
+                    story.append(Spacer(1, 4))
+                    for posted, mod_name, author, content in comments[:20]:
+                        text = " ".join(str(content).split())
+                        story.append(Paragraph(f"<b>{author}</b> on {mod_name} ({posted}): {text[:220]}", body))
+                    story.append(Spacer(1, 8))
+
+                events = storage.recent_events(20)
+                if events:
+                    story.append(Paragraph("<b>Recent events</b>", body))
+                    story.append(Spacer(1, 4))
+                    for e in events:
+                        story.append(Paragraph(f"{e['created_at']} — {e['kind']} · {e['mod_name']}: {e['message']}", small))
+                doc.build(story)
+            finally:
+                storage.close()
+            QMessageBox.information(self, "PDF export", f"Saved to:\n{path}")
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "Export failed", str(exc))
 

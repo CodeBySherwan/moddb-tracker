@@ -51,13 +51,22 @@ every step.
 
 - **Analytics page**: top mods, growth comparison, weekly/monthly/cumulative
   charts, moving average, growth %, best day/week ever, milestones, estimate
-  of next week's downloads.
+  of next week's downloads.  ✅ `analytics.py` (pure functions) + `AnalyticsPage`
+  in `gui.py`: mod selector, 30/60/90-day range, stat cards, per-day bars +
+  7-day moving average, cumulative totals (with milestone markers), weekly
+  bars; all-mod aggregate view with per-mod cumulative comparison.
 - **Interactive charts** via `pyqtgraph` (zoom/pan/hover) replacing static
-  matplotlib images on the Analytics page.
+  matplotlib images on the Analytics page.  ✅ hover readouts, drag-to-zoom,
+  PNG chart export.
 - **Notification center**: bell with unread badge, per-category history,
-  "reply now / ignore" actions.
-- **Export**: CSV + JSON (already have JSON), Excel + PDF report.
-- **Favourites/sorting preferences** persisted.
+  "reply now / ignore" actions.  ✅ `events.seen` column + badge in top bar,
+  kind filter, mark-all-read (on page visit or via bell), double-click /
+  context-menu "Open on ModDB".
+- **Export**: CSV + JSON (already have JSON), Excel + PDF report.  ✅ Export
+  menu in the top bar: CSV (4 sheets), Excel (openpyxl, 4 tabs), PDF report
+  (reportlab), JSON.
+- **Favourites/sorting preferences** persisted.  ✅ new `ui` config section:
+  `mods_sort`, `mods_filter` (debounced), `analytics_days`.
 
 ## Phase 3 — Advanced (future)
 

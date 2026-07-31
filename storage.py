@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS events (
     mod_name TEXT,
     message TEXT NOT NULL,
     url TEXT,
-    notified INTEGER NOT NULL DEFAULT 0
+    notified INTEGER NOT NULL DEFAULT 0,
+    seen INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_events_notified ON events(notified);
 
@@ -103,6 +104,12 @@ class Storage:
             self.conn.execute(
                 "ALTER TABLE mods ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0"
             )
+        event_cols = {r[1] for r in self.conn.execute("PRAGMA table_info(events)").fetchall()}
+        if "seen" not in event_cols:
+            self.conn.execute(
+                "ALTER TABLE events ADD COLUMN seen INTEGER NOT NULL DEFAULT 0"
+            )
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_events_seen ON events(seen)")
 
     def close(self) -> None:
         self.conn.close()
@@ -276,6 +283,29 @@ class Storage:
         return self.conn.execute(
             "SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
+
+    def count_unseen(self) -> int:
+        row = self.conn.execute("SELECT COUNT(*) AS n FROM events WHERE seen = 0").fetchone()
+        return int(row["n"] or 0)
+
+    def unseen_events(self, limit: int = 200) -> List[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM events WHERE seen = 0 ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+
+    def mark_events_seen(self, ids: Optional[Iterable[int]] = None) -> int:
+        if ids is None:
+            self.conn.execute("UPDATE events SET seen = 1 WHERE seen = 0")
+        else:
+            ids = [int(i) for i in ids if i]
+            if not ids:
+                return 0
+            placeholders = ",".join("?" for _ in ids)
+            self.conn.execute(
+                f"UPDATE events SET seen = 1 WHERE id IN ({placeholders})", tuple(ids)
+            )
+        self.conn.commit()
+        return self.conn.total_changes
 
     # ---- stats helpers for charts ------------------------------------
     def totals_per_mod(self) -> List[Dict[str, Any]]:

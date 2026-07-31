@@ -60,6 +60,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "output": "output",
         "logs": "logs",
     },
+    "ui": {
+        "mods_sort": 0,
+        "mods_filter": "",
+        "analytics_days": 60,
+    },
 }
 
 logger = logging.getLogger("tracker")
