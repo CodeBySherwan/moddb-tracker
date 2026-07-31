@@ -284,6 +284,50 @@ class Storage:
             "SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
 
+    # ---- search -------------------------------------------------------
+    def search(self, needle: str, limit: int = 25) -> Dict[str, List[Dict[str, Any]]]:
+        """Cross-data search across mods, comments, events and history snapshots."""
+        needle = (needle or "").strip()
+        if not needle:
+            return {"mods": [], "comments": [], "events": [], "history": []}
+        like = f"%{needle}%"
+        mods = [
+            dict(r)
+            for r in self.conn.execute(
+                "SELECT id, name_id, name, url, content_type, favorite FROM mods "
+                "WHERE active = 1 AND (name LIKE ? OR name_id LIKE ?) "
+                "ORDER BY name COLLATE NOCASE LIMIT ?",
+                (like, like, limit),
+            ).fetchall()
+        ]
+        comments = [
+            dict(r)
+            for r in self.conn.execute(
+                "SELECT c.id, c.mod_id, c.author, c.content, c.posted_at, m.name AS mod_name, m.url AS mod_url "
+                "FROM comments c LEFT JOIN mods m ON m.id = c.mod_id "
+                "WHERE c.author LIKE ? OR c.content LIKE ? ORDER BY c.posted_at DESC LIMIT ?",
+                (like, like, limit),
+            ).fetchall()
+        ]
+        events = [
+            dict(r)
+            for r in self.conn.execute(
+                "SELECT * FROM events WHERE message LIKE ? OR mod_name LIKE ? OR kind LIKE ? "
+                "ORDER BY id DESC LIMIT ?",
+                (like, like, like, limit),
+            ).fetchall()
+        ]
+        history = [
+            dict(r)
+            for r in self.conn.execute(
+                "SELECT s.*, m.name AS mod_name, m.url AS mod_url FROM snapshots s "
+                "LEFT JOIN mods m ON m.id = s.mod_id "
+                "WHERE m.name LIKE ? ORDER BY s.fetched_at DESC LIMIT ?",
+                (like, limit),
+            ).fetchall()
+        ]
+        return {"mods": mods, "comments": comments, "events": events, "history": history}
+
     def count_unseen(self) -> int:
         row = self.conn.execute("SELECT COUNT(*) AS n FROM events WHERE seen = 0").fetchone()
         return int(row["n"] or 0)

@@ -83,6 +83,10 @@ every step.
   strip: rule-based takeaways (momentum vs 30-day average, milestone reached,
   best week ever, flat/declining, next milestone ETA, steady growth, fastest
   mod, aggregate projection) with positive/info/negative cards.
+- **Search across all data** ✅ `storage.search` + `SearchResultsPage`: the
+  global search bar now searches mods, comments, events and history together
+  (grouped tree, double-click opens on ModDB); returns to the previous page
+  when cleared.
 
 ## Architecture
 

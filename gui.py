@@ -51,6 +51,8 @@ from PyQt6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QToolButton,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -1396,6 +1398,90 @@ class InsightsPage(QWidget):
             for ins in insights:
                 self.feed.addWidget(InsightCard(ins))
         self.feed.addStretch(1)
+
+
+class SearchResultsPage(QWidget):
+    """Global search results grouped by category (mods / comments / events / history)."""
+
+    open_url = pyqtSignal(str)
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        self.title = QLabel("Search")
+        self.title.setObjectName("PageTitle")
+        layout.addWidget(self.title)
+        self.hint = QLabel("Type in the search bar to look across mods, comments, events and history.")
+        self.hint.setObjectName("Hint")
+        layout.addWidget(self.hint)
+
+        self.tree = QTreeWidget()
+        self.tree.setColumnCount(3)
+        self.tree.setHeaderLabels(["Type", "Match", "Detail"])
+        self.tree.setRootIsDecorated(True)
+        self.tree.setAlternatingRowColors(True)
+        self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.tree.itemDoubleClicked.connect(self._open_item)
+        layout.addWidget(self.tree, 1)
+
+    def apply_filter(self, text: str) -> None:
+        needle = (text or "").strip()
+        storage = getattr(self, "_storage", None)
+        self.tree.clear()
+        if not needle:
+            self.hint.setText("Type at least 2 characters in the search bar to search everything.")
+            return
+        if len(needle) < 2 or storage is None:
+            return
+        results = storage.search(needle)
+        self.hint.setText(f"Results for \u201c{needle}\u201d")
+        total = 0
+        for group, rows, icon in (
+            ("Mods", results["mods"], "📦"),
+            ("Comments", results["comments"], "💬"),
+            ("Events", results["events"], "🔔"),
+            ("History", results["history"], "📈"),
+        ):
+            if not rows:
+                continue
+            section = QTreeWidgetItem([f"{icon} {group} ({len(rows)})", "", ""])
+            section.setExpanded(True)
+            for r in rows:
+                child = self._row_item(group, r)
+                if child is not None:
+                    section.addChild(child)
+                    total += 1
+            self.tree.addTopLevelItem(section)
+        if total == 0:
+            self.tree.addTopLevelItem(QTreeWidgetItem([f"No matches for \u201c{needle}\u201d.", "", ""]))
+        self.tree.expandAll()
+
+    def _row_item(self, group: str, row: Dict[str, Any]) -> Optional[QTreeWidgetItem]:
+        url = str(row.get("url") or row.get("mod_url") or "")
+        if group == "Mods":
+            item = QTreeWidgetItem(["Mod", row["name"], row.get("content_type", "mod")])
+        elif group == "Comments":
+            content = " ".join(str(row.get("content") or "").split())
+            item = QTreeWidgetItem(["Comment", f"{row['author']}: {content[:120]}", f"{row.get('mod_name', '')} · {row.get('posted_at', '')}"])
+        elif group == "Events":
+            item = QTreeWidgetItem(["Event", str(row.get("message", ""))[:160], f"{row.get('mod_name') or ''} · {row.get('created_at', '')}"])
+        elif group == "History":
+            item = QTreeWidgetItem(["History", f"{row.get('mod_name', '')} — {int(row.get('downloads_total') or 0):,} downloads", row.get("fetched_at", "")])
+        else:
+            return None
+        if url:
+            item.setData(0, Qt.ItemDataRole.UserRole, url)
+        return item
+
+    def _open_item(self, item: QTreeWidgetItem, _column: int) -> None:
+        url = item.data(0, Qt.ItemDataRole.UserRole)
+        if url:
+            self.open_url.emit(str(url))
 
 
 class ActivityFeed(QFrame):
@@ -2747,6 +2833,8 @@ class TrackerWindow(QMainWindow):
         self.resize(1280, 820)
         self.setMinimumSize(1080, 680)
 
+        self._search_override = False
+        self._saved_page = 0
         self._build_ui()
         self._wire_logging()
         self._build_tray()
@@ -2796,8 +2884,11 @@ class TrackerWindow(QMainWindow):
         self.events = EventsPage()
         self.log_page = LogPage()
         self.settings = SettingsPage(self.config)
+        self.search_page = SearchResultsPage()
         for page in (self.dashboard, self.mods, self.analytics, self.compare, self.insights, self.history, self.comments, self.events, self.settings, self.log_page):
             self.stack.addWidget(page)
+        self.stack.addWidget(self.search_page)
+        self.search_page.open_url.connect(self._open_url)
         self.settings.saved.connect(self._on_settings_saved)
         self.settings.file_reload.connect(self._on_settings_saved)
         self.mods.open_requested.connect(self._open_url)
@@ -2909,6 +3000,11 @@ class TrackerWindow(QMainWindow):
         return self.sidebar
 
     def _nav_changed(self, row: int) -> None:
+        if self._search_override:
+            self._search_override = False
+            self.search_box.blockSignals(True)
+            self.search_box.clear()
+            self.search_box.blockSignals(False)
         self.stack.setCurrentIndex(row)
         if self.stack.currentWidget() is self.events:
             self.events.mark_all_seen()
@@ -3341,9 +3437,18 @@ class TrackerWindow(QMainWindow):
 
     # ---- search ---------------------------------------------------------
     def _search_changed(self, text: str) -> None:
-        page = self.stack.currentWidget()
-        if hasattr(page, "apply_filter"):
-            page.apply_filter(text)
+        needle = (text or "").strip()
+        if len(needle) < 2:
+            if self._search_override:
+                self._search_override = False
+                self.stack.setCurrentIndex(self._saved_page)
+            return
+        if not self._search_override:
+            self._search_override = True
+            self._saved_page = self.stack.currentIndex()
+        self.search_page._storage = self.storage
+        self.stack.setCurrentWidget(self.search_page)
+        self.search_page.apply_filter(text)
 
     # ---- auto poll ------------------------------------------------------
     def _toggle_auto_poll(self, checked: bool) -> None:
