@@ -64,6 +64,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "mods_sort": 0,
         "mods_filter": "",
         "analytics_days": 60,
+        "dashboard": {
+            "stats": True,
+            "insights": True,
+            "charts": True,
+            "activity": True,
+            "activity_position": "right",
+        },
     },
 }
 

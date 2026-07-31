@@ -93,6 +93,10 @@ every step.
   ETA + progress bar) and a badge grid (on the radar, milestone tiers, best
   week, steady hands, big day, community, fast riser; locked badges for
   upcoming milestones).
+- **Dashboard widget rearrangement** ✅ `Customize` menu on the dashboard:
+  show/hide stat cards, insights, charts and activity, plus move the activity
+  feed between the right side and below the charts; persisted in
+  `ui.dashboard` config and applied on relaunch.
 
 ## Architecture
 

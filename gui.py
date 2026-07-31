@@ -2020,11 +2020,15 @@ class DashboardPage(QWidget):
     ]
     MIN_COLUMN_WIDTH = 460
 
-    def __init__(self, config: Dict[str, Any], parent: Optional[QWidget] = None) -> None:
+    def __init__(self, config: Dict[str, Any], config_path: str = CONFIG_FILE, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._config = config
+        self._config_path = config_path
+        self._storage: Optional[Storage] = None
+        self._insights_available = False
         self._chart_cards: List[ChartCard] = []
         self._current_cols = -1
+        self._load_prefs()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -2041,9 +2045,16 @@ class DashboardPage(QWidget):
         head_col.addWidget(self.subtitle)
         header.addLayout(head_col)
         header.addStretch(1)
+        self.customize_btn = QToolButton()
+        self.customize_btn.setText("Customize \u25be")
+        self.customize_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.customize_btn.setToolTip("Rearrange dashboard widgets")
+        self.customize_btn.setMenu(self._build_customize_menu())
+        header.addWidget(self.customize_btn)
         layout.addLayout(header)
 
-        self.stat_grid = QGridLayout()
+        self.stats_host = QWidget()
+        self.stat_grid = QGridLayout(self.stats_host)
         self.stat_grid.setSpacing(12)
         self.stat_cards: Dict[str, StatCard] = {}
         for key, caption in [
@@ -2062,18 +2073,110 @@ class DashboardPage(QWidget):
             self.stat_grid.addWidget(self.stat_cards[key], 0, i)
         for i, key in enumerate(["avg", "comments", "replies", "fastest"]):
             self.stat_grid.addWidget(self.stat_cards[key], 1, i)
-        layout.addLayout(self.stat_grid)
+        layout.addWidget(self.stats_host)
 
         self._build_insights_strip()
         layout.addWidget(self.insights_panel)
 
-        body = QHBoxLayout()
-        body.setSpacing(12)
-        body.addWidget(self._build_charts_section(), 1)
+        self.charts_section = self._build_charts_section()
+        self.body = QHBoxLayout()
+        self.body.setSpacing(12)
+        self.body.addWidget(self.charts_section, 1)
         self.activity = ActivityFeed()
         self.activity.setFixedWidth(320)
-        body.addWidget(self.activity)
-        layout.addLayout(body, 1)
+        self.body.addWidget(self.activity)
+        layout.addLayout(self.body, 1)
+
+        self.below_row = QHBoxLayout()
+        self.below_row.setSpacing(12)
+        layout.addLayout(self.below_row)
+
+        self._apply_layout()
+
+    # ---- rearrangement --------------------------------------------------
+    def _build_customize_menu(self) -> QMenu:
+        menu = QMenu(self)
+        self._act_stats = QAction("Stat cards", self)
+        self._act_insights = QAction("Insights", self)
+        self._act_charts = QAction("Charts", self)
+        self._act_activity = QAction("Activity", self)
+        for act, key in ((self._act_stats, "stats"), (self._act_insights, "insights"),
+                         (self._act_charts, "charts"), (self._act_activity, "activity")):
+            act.setCheckable(True)
+            act.toggled.connect(lambda on, k=key: self._set_pref(k, on))
+            menu.addAction(act)
+        menu.addSeparator()
+        sub = menu.addMenu("Activity position")
+        self._act_pos_right = QAction("Right side", self)
+        self._act_pos_below = QAction("Below charts", self)
+        for act, pos in ((self._act_pos_right, "right"), (self._act_pos_below, "below")):
+            act.setCheckable(True)
+            act.triggered.connect(lambda _, p=pos: self._set_activity_position(p))
+            sub.addAction(act)
+        return menu
+
+    def _load_prefs(self) -> None:
+        prefs = self._config.get("ui", {}).get("dashboard", {}) or {}
+        self._prefs = {
+            "stats": bool(prefs.get("stats", True)),
+            "insights": bool(prefs.get("insights", True)),
+            "charts": bool(prefs.get("charts", True)),
+            "activity": bool(prefs.get("activity", True)),
+            "activity_position": "below" if prefs.get("activity_position") == "below" else "right",
+        }
+
+    def _save_prefs(self) -> None:
+        try:
+            self._config.setdefault("ui", {}).setdefault("dashboard", {}).update(self._prefs)
+            save_config(self._config, self._config_path)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _sync_menu(self) -> None:
+        for act, key in ((self._act_stats, "stats"), (self._act_insights, "insights"),
+                         (self._act_charts, "charts"), (self._act_activity, "activity")):
+            act.setChecked(self._prefs[key])
+        self._act_pos_right.setChecked(self._prefs["activity_position"] == "right")
+        self._act_pos_below.setChecked(self._prefs["activity_position"] == "below")
+
+    def _set_pref(self, key: str, value: bool) -> None:
+        if self._prefs.get(key) == bool(value):
+            return
+        self._prefs[key] = bool(value)
+        self._apply_layout()
+        self._save_prefs()
+
+    def _set_activity_position(self, pos: str) -> None:
+        if self._prefs["activity_position"] == pos:
+            return
+        self._prefs["activity_position"] = pos
+        self._move_activity()
+        self._sync_menu()
+        self._save_prefs()
+
+    def _move_activity(self) -> None:
+        pos = self._prefs["activity_position"]
+        is_below = self.below_row.indexOf(self.activity) >= 0
+        if pos == "below":
+            if not is_below:
+                self.body.removeWidget(self.activity)
+                self.below_row.addWidget(self.activity, 1)
+            self.activity.setFixedWidth(0)
+            self.activity.setMaximumHeight(230)
+        else:
+            if is_below:
+                self.below_row.removeWidget(self.activity)
+                self.body.addWidget(self.activity)
+            self.activity.setFixedWidth(320)
+            self.activity.setMaximumHeight(16777215)
+
+    def _apply_layout(self) -> None:
+        self.stats_host.setVisible(self._prefs["stats"])
+        self.charts_section.setVisible(self._prefs["charts"])
+        self.activity.setVisible(self._prefs["activity"])
+        self.insights_panel.setVisible(self._prefs["insights"] and self._insights_available)
+        self._move_activity()
+        self._sync_menu()
 
     def _build_insights_strip(self) -> None:
         self.insights_panel = QFrame()
@@ -2127,6 +2230,7 @@ class DashboardPage(QWidget):
 
     def refresh(self, storage: Optional[Storage] = None) -> None:
         if storage is not None:
+            self._storage = storage
             self._update_stats(storage)
             self._update_insights(storage)
             self.activity.refresh(storage)
@@ -2140,7 +2244,8 @@ class DashboardPage(QWidget):
 
     def _update_insights(self, storage: Storage) -> None:
         insights = analytics.generate_insights(storage, 30, limit=3)
-        self.insights_panel.setVisible(bool(insights))
+        self._insights_available = bool(insights)
+        self.insights_panel.setVisible(self._prefs["insights"] and self._insights_available)
         for i, lab in enumerate(self.insight_items):
             if i < len(insights):
                 lab.setText(f"🛈 {insights[i]['title']} — {insights[i]['detail']}")
@@ -3117,7 +3222,7 @@ class TrackerWindow(QMainWindow):
         body.addWidget(self._build_sidebar())
 
         self.stack = QStackedWidget()
-        self.dashboard = DashboardPage(self.config)
+        self.dashboard = DashboardPage(self.config, self.config_path)
         self.mods = ModsPage(self.config, self.config_path)
         self.analytics = AnalyticsPage(self.config, self.config_path)
         self.compare = ComparePage(self.config, self.config_path)
@@ -3364,6 +3469,8 @@ class TrackerWindow(QMainWindow):
         self.config = load_config(self.config_path)
         self.storage = Storage(self.config["paths"]["db"])
         self.dashboard._config = self.config
+        self.dashboard._load_prefs()
+        self.dashboard._apply_layout()
         self.mods._config = self.config
         self.analytics._config = self.config
         self.compare._config = self.config
