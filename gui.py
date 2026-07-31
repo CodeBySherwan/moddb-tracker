@@ -833,8 +833,15 @@ class AnalyticsPage(QWidget):
         self._storage: Optional[Storage] = None
         self._summaries: List[Dict[str, Any]] = []
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 8, 0)
         layout.setSpacing(12)
 
         title = QLabel("Analytics")
@@ -883,7 +890,8 @@ class AnalyticsPage(QWidget):
         hl.addWidget(self.highlights_label)
         layout.addWidget(self.highlights)
 
-        grid = QGridLayout()
+        self.grid_host = QWidget()
+        grid = QGridLayout(self.grid_host)
         grid.setSpacing(12)
         self.plot_daily = PlotCard("Downloads per day", "Bars: daily gain   \u00b7   line: 7-day average")
         self.plot_cum = PlotCard("Cumulative downloads", "Total downloads over time")
@@ -891,13 +899,16 @@ class AnalyticsPage(QWidget):
         grid.addWidget(self.plot_daily, 0, 0)
         grid.addWidget(self.plot_cum, 0, 1)
         grid.addWidget(self.plot_weekly, 1, 0, 1, 2)
-        layout.addLayout(grid, 1)
+        layout.addWidget(self.grid_host, 1)
 
         self.placeholder = QLabel("No data yet. Run a poll to start collecting download history.")
         self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.placeholder.setObjectName("Hint")
         self.placeholder.setMinimumHeight(160)
-        layout.addWidget(self.placeholder)
+        layout.addWidget(self.placeholder, 1)
+
+        self.scroll.setWidget(content)
+        outer.addWidget(self.scroll)
 
     def _default_days_index(self) -> int:
         days = int(self._config.get("ui", {}).get("analytics_days", 60))
@@ -938,6 +949,7 @@ class AnalyticsPage(QWidget):
     def _update(self) -> None:
         has = bool(self._summaries)
         self.placeholder.setVisible(not has)
+        self.grid_host.setVisible(has)
         self.highlights.setVisible(has)
         for card in (self.plot_daily, self.plot_cum, self.plot_weekly):
             card.clear_chart()
@@ -1077,8 +1089,15 @@ class ComparePage(QWidget):
         self._summary_a: Optional[Dict[str, Any]] = None
         self._summary_b: Optional[Dict[str, Any]] = None
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 8, 0)
         layout.setSpacing(12)
 
         title = QLabel("Compare")
@@ -1117,10 +1136,12 @@ class ComparePage(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.table.setMaximumHeight(250)
+        self.table.setMinimumHeight(330)
+        self.table.setMaximumHeight(360)
         layout.addWidget(self.table)
 
-        grid = QGridLayout()
+        self.grid_host = QWidget()
+        grid = QGridLayout(self.grid_host)
         grid.setSpacing(12)
         self.plot_cum = PlotCard("Cumulative downloads", f"blue = Mod A   \u00b7   green = Mod B")
         self.plot_daily = PlotCard("Downloads per day", "Daily gain, both mods")
@@ -1128,13 +1149,16 @@ class ComparePage(QWidget):
         grid.addWidget(self.plot_cum, 0, 0)
         grid.addWidget(self.plot_daily, 0, 1)
         grid.addWidget(self.plot_diff, 1, 0, 1, 2)
-        layout.addLayout(grid, 1)
+        layout.addWidget(self.grid_host, 1)
 
         self.placeholder = QLabel("Track at least two mods to compare them here.")
         self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.placeholder.setObjectName("Hint")
         self.placeholder.setMinimumHeight(160)
-        layout.addWidget(self.placeholder)
+        layout.addWidget(self.placeholder, 1)
+
+        self.scroll.setWidget(content)
+        outer.addWidget(self.scroll)
 
     # ---- refresh --------------------------------------------------------
     def refresh(self, storage: Storage) -> None:
@@ -1183,6 +1207,8 @@ class ComparePage(QWidget):
         has = bool(self._mods)
         ready = has and len(self._mods) >= 2 and storage is not None
         self.placeholder.setVisible(not ready)
+        self.table.setVisible(ready)
+        self.grid_host.setVisible(ready)
         for card in (self.plot_cum, self.plot_daily, self.plot_diff):
             card.clear_chart()
         self.table.setRowCount(0)
