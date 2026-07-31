@@ -1510,6 +1510,222 @@ class SearchResultsPage(QWidget):
             self.open_url.emit(str(url))
 
 
+class BadgeCard(QFrame):
+    """Single achievement badge, highlighted when unlocked."""
+
+    ICONS = {
+        "tracked": "🛰️",
+        "milestone-100000": "🚩",
+        "milestone-250000": "🥉",
+        "milestone-500000": "🥈",
+        "milestone-1000000": "🥇",
+        "milestone-2500000": "💎",
+        "milestone-5000000": "👑",
+        "milestone-10000000": "🚀",
+        "best-week": "🏆",
+        "steady": "📈",
+        "big-day": "🌋",
+        "community": "💬",
+        "fast-riser": "⚡",
+    }
+
+    def __init__(self, badge: Dict[str, Any], parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("Panel")
+        unlocked = bool(badge.get("unlocked"))
+        self.setStyleSheet(
+            f"QFrame#Panel {{ border: 1px solid {ACCENT}; }}" if unlocked
+            else f"QFrame#Panel {{ border: 1px solid {BORDER}; }}"
+        )
+        icon = self.ICONS.get(badge.get("key", ""), "🎖️") if unlocked else "🔒"
+        border_color = ACCENT if unlocked else FAINT
+        text_color = TEXT if unlocked else FAINT
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(4)
+        top = QHBoxLayout()
+        ic = QLabel(icon)
+        ic.setStyleSheet(f"font-size: 22px; background: transparent; border: none; color: {border_color};")
+        top.addWidget(ic)
+        top.addStretch(1)
+        if unlocked and badge.get("date"):
+            d = QLabel(str(badge["date"]))
+            d.setStyleSheet(f"color: {GRAY}; font-size: 10px; background: transparent; border: none;")
+            top.addWidget(d)
+        lay.addLayout(top)
+        title = QLabel(badge.get("title", ""))
+        title.setWordWrap(True)
+        title.setStyleSheet(f"font-weight: 700; font-size: 13px; color: {text_color}; background: transparent; border: none;")
+        lay.addWidget(title)
+        detail = QLabel(badge.get("detail", ""))
+        detail.setWordWrap(True)
+        detail.setStyleSheet(f"color: {GRAY}; font-size: 11px; background: transparent; border: none;")
+        lay.addWidget(detail)
+
+
+class AchievementsPage(QWidget):
+    """Milestone timeline and achievement badges for each tracked mod."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._storage: Optional[Storage] = None
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 8, 0)
+        layout.setSpacing(12)
+
+        title = QLabel("Achievements")
+        title.setObjectName("PageTitle")
+        layout.addWidget(title)
+        hint = QLabel("Milestone timeline and achievement badges for each tracked mod.")
+        hint.setObjectName("Hint")
+        layout.addWidget(hint)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        row.addWidget(QLabel("Mod:"))
+        self.mod_combo = QComboBox()
+        self.mod_combo.setMinimumWidth(240)
+        self.mod_combo.currentIndexChanged.connect(self._render)
+        row.addWidget(self.mod_combo)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        self.summary = QFrame()
+        self.summary.setObjectName("Panel")
+        sl = QHBoxLayout(self.summary)
+        sl.setContentsMargins(14, 10, 14, 10)
+        sl.setSpacing(24)
+        self.sum_labels: Dict[str, QLabel] = {}
+        for key, cap in (("total", "Total downloads"), ("first", "First seen"), ("span", "Days tracked"), ("avg", "Avg / day")):
+            col = QVBoxLayout()
+            col.setSpacing(2)
+            c = QLabel(cap)
+            c.setObjectName("Caption")
+            v = QLabel("—")
+            v.setStyleSheet("font-weight: 700; font-size: 16px; background: transparent; border: none;")
+            self.sum_labels[key] = v
+            col.addWidget(c)
+            col.addWidget(v)
+            sl.addLayout(col)
+        sl.addStretch(1)
+        layout.addWidget(self.summary)
+
+        layout.addWidget(section_label("Milestones"))
+        self.timeline = QFrame()
+        self.timeline.setObjectName("Panel")
+        self.tl_lay = QVBoxLayout(self.timeline)
+        self.tl_lay.setContentsMargins(14, 12, 14, 12)
+        self.tl_lay.setSpacing(8)
+        layout.addWidget(self.timeline)
+
+        layout.addWidget(section_label("Achievements"))
+        self.badges_host = QWidget()
+        self.badges_flow = FlowLayout(self.badges_host, spacing=10, min_width=220)
+        layout.addWidget(self.badges_host)
+
+        self.placeholder = QLabel("No tracked mods yet. Poll or add mods to see achievements.")
+        self.placeholder.setObjectName("Hint")
+        self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.placeholder.setMinimumHeight(120)
+        layout.addWidget(self.placeholder, 1)
+
+        self.scroll.setWidget(content)
+        outer.addWidget(self.scroll)
+
+    def refresh(self, storage: Storage) -> None:
+        self._storage = storage
+        current = self.mod_combo.currentData()
+        self.mod_combo.blockSignals(True)
+        self.mod_combo.clear()
+        for m in storage.get_mods(active_only=True):
+            self.mod_combo.addItem(m["name"], int(m["id"]))
+        if current is not None:
+            idx = self.mod_combo.findData(current)
+            if idx >= 0:
+                self.mod_combo.setCurrentIndex(idx)
+        self.mod_combo.blockSignals(False)
+        self._render()
+
+    def _render(self) -> None:
+        storage = self._storage
+        has = storage is not None and self.mod_combo.count() > 0
+        self.summary.setVisible(has)
+        self.timeline.setVisible(has)
+        self.badges_host.setVisible(has)
+        self.placeholder.setVisible(not has)
+        if not has:
+            return
+        data = analytics.achievements(storage, int(self.mod_combo.currentData()))
+        tl = data["milestones"]
+        self.sum_labels["total"].setText(f"{tl['total']:,}")
+        self.sum_labels["first"].setText(str(tl["first_seen"] or "—"))
+        span = (datetime.date.today() - tl["first_seen"]).days + 1 if tl["first_seen"] else 0
+        self.sum_labels["span"].setText(f"{span:,}" if span else "—")
+        self.sum_labels["avg"].setText(f"{tl['avg_per_day']:,}")
+
+        while self.tl_lay.count():
+            item = self.tl_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        for m in tl["reached"]:
+            self.tl_lay.addWidget(self._tl_row(
+                f"◆ {m['threshold']:,} downloads",
+                f"Reached {m['date']} — {m['days']} days after the previous one ({m['per_day']} per day).",
+                SUCCESS))
+        if tl["next"]:
+            n = tl["next"]
+            eta = f"~{n['eta_days']} days at {n['avg_per_day']}/day" if n["eta_days"] else "pace too slow to estimate"
+            self.tl_lay.addWidget(self._tl_row(
+                f"◇ {n['threshold']:,} downloads",
+                f"{n['total']:,} so far — {n['remaining']:,} to go ({eta}).",
+                WARNING, progress=n["total"] / n["threshold"]))
+        if not tl["reached"] and not tl["next"]:
+            self.tl_lay.addWidget(self._tl_row("No milestones yet", "Keep polling — milestones appear as downloads grow.", GRAY))
+        self.tl_lay.addStretch(1)
+
+        self.badges_flow.clear()
+        for b in data["achievements"]:
+            self.badges_flow.add_card(BadgeCard(b))
+
+    @staticmethod
+    def _tl_row(title: str, detail: str, color: str, progress: Optional[float] = None) -> QFrame:
+        row = QFrame()
+        row.setObjectName("EventRow")
+        h = QHBoxLayout(row)
+        h.setContentsMargins(4, 4, 4, 4)
+        h.setSpacing(12)
+        dot = QLabel()
+        dot.setFixedSize(12, 12)
+        dot.setStyleSheet(f"background: {color}; border-radius: 6px; border: none;")
+        h.addWidget(dot)
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        t = QLabel(title)
+        t.setStyleSheet(f"font-weight: 600; font-size: 13px; color: {color}; background: transparent; border: none;")
+        col.addWidget(t)
+        d = QLabel(detail)
+        d.setWordWrap(True)
+        d.setStyleSheet(f"color: {GRAY}; font-size: 11px; background: transparent; border: none;")
+        col.addWidget(d)
+        if progress is not None:
+            bar = QProgressBar()
+            bar.setRange(0, 1000)
+            bar.setValue(int(min(1.0, progress) * 1000))
+            bar.setTextVisible(False)
+            bar.setFixedHeight(6)
+            col.addWidget(bar)
+        h.addLayout(col, 1)
+        return row
+
+
 class ActivityFeed(QFrame):
     """Sidebar panel listing recent download / comment events."""
 
@@ -2836,6 +3052,7 @@ class TrackerWindow(QMainWindow):
         ("Analytics", "📊"),
         ("Compare", "⚖️"),
         ("Insights", "💡"),
+        ("Achievements", "🏆"),
         ("History", "📈"),
         ("Comments", "💬"),
         ("Notifications", "🔔"),
@@ -2905,13 +3122,14 @@ class TrackerWindow(QMainWindow):
         self.analytics = AnalyticsPage(self.config, self.config_path)
         self.compare = ComparePage(self.config, self.config_path)
         self.insights = InsightsPage()
+        self.achievements = AchievementsPage()
         self.history = HistoryPage()
         self.comments = CommentsPage()
         self.events = EventsPage()
         self.log_page = LogPage()
         self.settings = SettingsPage(self.config)
         self.search_page = SearchResultsPage()
-        for page in (self.dashboard, self.mods, self.analytics, self.compare, self.insights, self.history, self.comments, self.events, self.settings, self.log_page):
+        for page in (self.dashboard, self.mods, self.analytics, self.compare, self.insights, self.achievements, self.history, self.comments, self.events, self.settings, self.log_page):
             self.stack.addWidget(page)
         self.stack.addWidget(self.search_page)
         self.search_page.open_url.connect(self._open_url)
@@ -3120,6 +3338,7 @@ class TrackerWindow(QMainWindow):
         self.analytics.refresh(self.storage)
         self.compare.refresh(self.storage)
         self.insights.refresh(self.storage)
+        self.achievements.refresh(self.storage)
         self.history.refresh(self.storage)
         self.comments.refresh(self.storage)
         self.events.refresh(self.storage)

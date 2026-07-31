@@ -87,6 +87,12 @@ every step.
   global search bar now searches mods, comments, events and history together
   (grouped tree, double-click opens on ModDB); returns to the previous page
   when cleared.
+- **Achievements + milestones timeline** ✅ `analytics.milestone_timeline` +
+  `analytics.achievements` + `AchievementsPage`: per-mod milestone timeline
+  (reached thresholds with days-between and per-day rate, next milestone with
+  ETA + progress bar) and a badge grid (on the radar, milestone tiers, best
+  week, steady hands, big day, community, fast riser; locked badges for
+  upcoming milestones).
 
 ## Architecture
 

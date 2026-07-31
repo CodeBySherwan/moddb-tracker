@@ -217,6 +217,94 @@ def aggregate_summary(summaries: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def milestone_timeline(storage, mod_id: int) -> Dict[str, Any]:
+    """Full-history milestone timeline for one mod: reached milestones (with
+    days-between and per-day rate) plus the next milestone with an ETA."""
+    series = daily_series(storage, mod_id, days=100 * 365)
+    if not series:
+        return {"total": 0, "reached": [], "next": None, "first_seen": None, "avg_per_day": 0.0}
+    total = series[-1][1]
+    first_seen = series[0][0]
+    reached: List[Dict[str, Any]] = []
+    for m in milestones(series):
+        prev_threshold = reached[-1]["threshold"] if reached else 0
+        prev_date = reached[-1]["date"] if reached else first_seen
+        entry = dict(m)
+        days = max(1, (m["date"] - prev_date).days)
+        entry["days"] = days
+        entry["gain"] = m["threshold"] - prev_threshold
+        entry["per_day"] = round(entry["gain"] / days, 1)
+        reached.append(entry)
+
+    next_threshold = next((t for t in MILESTONES if total < t), None)
+    next_meta: Optional[Dict[str, Any]] = None
+    if next_threshold is not None:
+        deltas = daily_deltas(series)
+        last30 = sum(v for d, v in deltas if (datetime.date.today() - d).days < 30)
+        avg = last30 / 30.0
+        if avg <= 0:
+            avg = total / max(1, (datetime.date.today() - first_seen).days)
+        next_meta = {
+            "threshold": next_threshold,
+            "total": total,
+            "remaining": next_threshold - total,
+            "avg_per_day": round(avg, 1),
+            "eta_days": int(math.ceil((next_threshold - total) / avg)) if avg > 0 else None,
+        }
+    span = max(1, (datetime.date.today() - first_seen).days)
+    return {
+        "total": total,
+        "reached": reached,
+        "next": next_meta,
+        "first_seen": first_seen,
+        "avg_per_day": round(total / span, 1),
+    }
+
+
+def achievements(storage, mod_id: int) -> Dict[str, Any]:
+    """Achievement badges plus the milestone timeline for one mod."""
+    tl = milestone_timeline(storage, mod_id)
+    s = mod_summary(storage, mod_id, 365)
+    totals = {int(t["id"]): t for t in storage.totals_per_mod()}
+    comments = int(totals.get(mod_id, {}).get("comments", 0) or 0)
+
+    def _date_of(label: Optional[str]) -> Optional[Date]:
+        if not label:
+            return None
+        try:
+            return Date.fromisoformat(str(label).replace("week of ", "")[:10])
+        except Exception:  # noqa: BLE001
+            return None
+
+    out: List[Dict[str, Any]] = []
+    def add(key: str, title: str, detail: str, unlocked: bool, date: Optional[Date] = None) -> None:
+        out.append({"key": key, "title": title, "detail": detail, "unlocked": bool(unlocked), "date": date})
+
+    add("tracked", "On the radar", "Mod added to tracking.", True, tl["first_seen"])
+    for m in tl["reached"]:
+        add(f"milestone-{m['threshold']}", f"{m['threshold']:,} downloads",
+            f"Reached on {m['date']} after {m['days']} days ({m['per_day']} per day).", True, m["date"])
+    if tl["next"] is not None:
+        n = tl["next"]
+        eta = f"~{n['eta_days']} days at {n['avg_per_day']}/day" if n["eta_days"] else "pace too slow to tell"
+        add(f"milestone-{n['threshold']}", f"{n['threshold']:,} downloads",
+            f"{n['total']:,} so far — {n['remaining']:,} to go ({eta}).", False)
+
+    if s["best_week"]:
+        add("best-week", "Best week ever", f"{s['best_week']['label']} with +{s['best_week']['value']:,}.", True,
+            _date_of(s["best_week"]["label"]))
+    deltas = s["deltas"]
+    if len(deltas) >= 7 and all(v > 0 for _, v in deltas[-7:]):
+        add("steady", "Steady hands", "Positive downloads every day for the last week.", True)
+    if s["best_day"]:
+        add("big-day", "Big day", f"Best single day: +{s['best_day']['value']:,} on {s['best_day']['label']}.", True,
+            _date_of(s["best_day"]["label"]))
+    add("community", "Community", f"{comments} comments on this mod.", comments >= 25)
+    add("fast-riser", "Fast riser", f"365-day growth of {s['growth_pct']}%.", s["growth_pct"] >= 50)
+
+    return {"milestones": tl, "achievements": out, "summary": s}
+
+
 def _mk_insight(kind: str, title: str, detail: str, mod: Optional[str] = None) -> Dict[str, Any]:
     return {"kind": kind, "title": title, "detail": detail, "mod": mod}
 
