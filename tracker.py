@@ -395,6 +395,15 @@ def snapshot_mod(storage: Storage, mod: Dict[str, Any], config: Dict[str, Any], 
     downloads_today = int(fields.get("downloads_today") or 0)
     downloads_total = int(fields.get("downloads_total") or 0)
 
+    if delta > 0:
+        storage.add_event(
+            "download",
+            f"+{delta} new download{'s' if delta != 1 else ''} (total {downloads_total:,})",
+            mod_id,
+            mod_name,
+            mod_url,
+        )
+
     if notify and config["poll"]["notify_on_downloads"]:
         if delta > 0:
             events.append(
@@ -431,6 +440,13 @@ def snapshot_mod(storage: Storage, mod: Dict[str, Any], config: Dict[str, Any], 
                 continue  # our own comment
             kind = classify_comment(comment, m_names)
             snippet = (comment["content"] or "")[:160].replace("\n", " ")
+            storage.add_event(
+                kind,  # "reply" or "comment"
+                f"{comment['author']}: {snippet}",
+                mod_id,
+                mod_name,
+                mod_url,
+            )
             if kind == "reply":
                 if config["poll"]["notify_on_replies"]:
                     events.append(

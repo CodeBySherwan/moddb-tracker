@@ -40,7 +40,9 @@ PyQt6 desktop app with:
 - **Mods** — latest stats per item; double-click a row to open its ModDB page
 - **History** — per-item snapshot table with day-over-day delta
 - **Comments / Events** — all comments and notification events
-- **Settings** — edit `config.json` from the UI (profile, poll interval, toggles)
+- **Configuration** — edit everything in-app (profile, manual mods list, poll
+  interval, notifications, tray behavior, paths) plus a raw-JSON editor for
+  advanced options; no need to open `config.json` by hand
 - **Log** — live log output
 - Toolbar buttons: **Poll now**, **Rescan profile**, **Refresh**, **Regenerate charts**
 - **Auto-poll** checkbox in the status bar polls every `interval_minutes`

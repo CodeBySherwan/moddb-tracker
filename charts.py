@@ -18,17 +18,18 @@ matplotlib.use("Agg")
 import matplotlib.dates as mdates  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 
-ACCENT = "#f0c040"
-BLUE = "#29b6f6"
-ORANGE = "#ff7043"
-PURPLE = "#ab47bc"
-GREEN = "#4caf50"
-RED = "#ef5350"
-GRAY = "#bdbdbd"
-PANEL = "#1e1e1e"
-GRID = "#333333"
+ACCENT = "#3b82f6"
+BLUE = "#3b82f6"
+ORANGE = "#f59e0b"
+PURPLE = "#a78bfa"
+GREEN = "#22c55e"
+RED = "#ef4444"
+GRAY = "#94a3b8"
+PANEL = "#1e293b"
+GRID = "#334155"
+BG = "#0f172a"
 
-MOD_COLORS = [BLUE, ORANGE, GREEN, PURPLE, ACCENT, RED, "#26a69a", "#ec407a", "#8d6e63"]
+MOD_COLORS = [BLUE, ORANGE, GREEN, PURPLE, ACCENT, RED, "#22d3ee", "#ec4899", "#a8a29e"]
 
 
 def _style(ax) -> None:
@@ -43,7 +44,7 @@ def _style(ax) -> None:
 
 def _fig(**kwargs):
     fig = plt.figure(**kwargs)
-    fig.patch.set_facecolor("#111111")
+    fig.patch.set_facecolor(BG)
     return fig
 
 
@@ -183,8 +184,15 @@ def plot_comment_activity(comment_counts: List[dict], out_dir: Path) -> Path:
     ax = fig.add_subplot(111)
     _style(ax)
 
-    days = [datetime.date.fromisoformat(r["day"]) for r in comment_counts]
-    counts = [int(r["n"]) for r in comment_counts]
+    days = [datetime.date.fromisoformat(r["day"]) for r in comment_counts if r["day"]]
+    counts = [int(r["n"]) for r in comment_counts if r["day"]]
+    if not days:
+        ax.text(0.5, 0.5, "No comments yet", ha="center", va="center",
+                transform=ax.transAxes, color=GRAY)
+        path = out_dir / "comment_activity.png"
+        fig.savefig(path, facecolor=fig.get_facecolor())
+        plt.close(fig)
+        return path
     ax.bar(days, counts, color=GREEN, alpha=0.85, width=0.9)
     ax.set_title("Comments per day", color=ACCENT, fontweight="bold")
     ax.set_ylabel("Comments")
@@ -263,8 +271,9 @@ def plot_dashboard(
 
     # 4. comments per day
     ax = axes[3]
-    days = [datetime.date.fromisoformat(r["day"]) for r in comment_counts]
-    ax.bar(days, [int(r["n"]) for r in comment_counts], color=GREEN, alpha=0.85, width=0.9)
+    days = [datetime.date.fromisoformat(r["day"]) for r in comment_counts if r["day"]]
+    counts = [int(r["n"]) for r in comment_counts if r["day"]]
+    ax.bar(days, counts, color=GREEN, alpha=0.85, width=0.9)
     ax.set_title("Comments per day", color=ACCENT, fontweight="bold")
 
     for ax in axes:

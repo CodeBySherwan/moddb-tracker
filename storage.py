@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS mods (
     name TEXT NOT NULL,
     content_type TEXT NOT NULL DEFAULT 'mod',
     active INTEGER NOT NULL DEFAULT 1,
+    favorite INTEGER NOT NULL DEFAULT 0,
     discovered_at TEXT NOT NULL
 );
 
@@ -98,6 +99,10 @@ class Storage:
             self.conn.execute(
                 "ALTER TABLE mods ADD COLUMN content_type TEXT NOT NULL DEFAULT 'mod'"
             )
+        if "favorite" not in cols:
+            self.conn.execute(
+                "ALTER TABLE mods ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0"
+            )
 
     def close(self) -> None:
         self.conn.close()
@@ -129,6 +134,10 @@ class Storage:
 
     def set_mod_active(self, name_id: str, active: bool) -> None:
         self.conn.execute("UPDATE mods SET active = ? WHERE name_id = ?", (1 if active else 0, name_id))
+        self.conn.commit()
+
+    def set_mod_favorite(self, name_id: str, favorite: bool) -> None:
+        self.conn.execute("UPDATE mods SET favorite = ? WHERE name_id = ?", (1 if favorite else 0, name_id))
         self.conn.commit()
 
     def get_mods(self, active_only: bool = True) -> List[sqlite3.Row]:
@@ -270,11 +279,14 @@ class Storage:
 
     # ---- stats helpers for charts ------------------------------------
     def totals_per_mod(self) -> List[Dict[str, Any]]:
-        """Latest snapshot per mod, as dicts."""
+        """Latest snapshot per mod, as dicts (incl. comment/reply counts)."""
         rows = self.conn.execute(
             """
             SELECT m.id, m.name, m.name_id, m.url, s.downloads_total, s.downloads_today,
-                   s.visits, s.visits_today, s.rank, s.rank_total, s.watchers, s.rating, s.files
+                   s.visits, s.visits_today, s.rank, s.rank_total, s.watchers, s.rating, s.files,
+                   (SELECT COUNT(*) FROM comments c WHERE c.mod_id = m.id) AS comments,
+                   (SELECT COUNT(*) FROM comments c WHERE c.mod_id = m.id AND c.parent_id IS NOT NULL) AS replies,
+                   m.favorite
             FROM mods m
             JOIN snapshots s ON s.id = (
                 SELECT s2.id FROM snapshots s2
@@ -285,6 +297,81 @@ class Storage:
             """
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def dashboard_stats(self, days: int = 30) -> Dict[str, Any]:
+        """Aggregate numbers for the dashboard stat cards."""
+        totals = self.totals_per_mod()
+        total_downloads = sum(int(t["downloads_total"] or 0) for t in totals)
+        today_downloads = sum(int(t["downloads_today"] or 0) for t in totals)
+        comments = sum(int(t["comments"] or 0) for t in totals)
+        replies = sum(int(t["replies"] or 0) for t in totals)
+
+        day_deltas = self.daily_download_deltas(days=days)
+        week = sum(v for d, v in day_deltas if (datetime.date.today() - d).days < 7)
+        month = sum(v for d, v in day_deltas if (datetime.date.today() - d).days < days)
+
+        avg_per_day = round(month / days, 1) if days else 0.0
+
+        fastest = None
+        per_mod_week: Dict[str, int] = {}
+        for mod_id, snaps in self.snapshots_for_all([t["id"] for t in totals]).items():
+            name = next((t["name"] for t in totals if t["id"] == mod_id), str(mod_id))
+            per_mod_week[name] = 0
+            prev = None
+            for s in snaps:
+                d = datetime.date.fromisoformat(s["fetched_at"][:10])
+                if (datetime.date.today() - d).days < 7:
+                    total = int(s["downloads_total"] or 0)
+                    if prev is not None and total > prev:
+                        per_mod_week[name] += total - prev
+                    prev = max(prev or 0, total)
+                else:
+                    prev = max(prev or 0, int(s["downloads_total"] or 0))
+        if per_mod_week:
+            fastest = max(per_mod_week, key=per_mod_week.get)
+            if per_mod_week[fastest] <= 0:
+                fastest = None
+
+        return {
+            "total_downloads": total_downloads,
+            "today_downloads": today_downloads,
+            "week_downloads": week,
+            "month_downloads": month,
+            "avg_per_day": avg_per_day,
+            "comments": comments,
+            "replies": replies,
+            "tracked_mods": len(totals),
+            "fastest_mod": fastest,
+            "fastest_delta": per_mod_week.get(fastest, 0) if fastest else 0,
+        }
+
+    def daily_download_deltas(self, days: int = 30) -> List[tuple]:
+        """Downloads gained per day (summed across all mods) for the last `days` days."""
+        rows = self.conn.execute(
+            """
+            SELECT mod_id, date(fetched_at) AS day, MAX(downloads_total) AS total
+            FROM snapshots
+            WHERE fetched_at >= date('now', ?)
+            GROUP BY mod_id, day
+            ORDER BY day
+            """,
+            (f"-{days} days",),
+        ).fetchall()
+
+        by_mod: Dict[int, Dict[str, int]] = {}
+        for r in rows:
+            by_mod.setdefault(r["mod_id"], {})[r["day"]] = int(r["total"] or 0)
+
+        per_day: Dict[datetime.date, int] = {}
+        for _, days_map in by_mod.items():
+            prev = None
+            for day in sorted(days_map):
+                d = datetime.date.fromisoformat(day)
+                total = days_map[day]
+                if prev is not None and total > prev:
+                    per_day[d] = per_day.get(d, 0) + (total - prev)
+                prev = total if prev is None else max(prev, total)
+        return sorted(per_day.items())
 
     def comment_counts_per_day(self, mod_ids: Optional[List[int]] = None, days: int = 60) -> List[sqlite3.Row]:
         if mod_ids:
