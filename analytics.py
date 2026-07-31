@@ -8,6 +8,7 @@ Analytics page and the export reports.
 from __future__ import annotations
 
 import datetime
+import math
 import statistics
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -214,3 +215,89 @@ def aggregate_summary(summaries: List[Dict[str, Any]]) -> Dict[str, Any]:
         "next_week": next_week,
         "count": len(summaries),
     }
+
+
+def _mk_insight(kind: str, title: str, detail: str, mod: Optional[str] = None) -> Dict[str, Any]:
+    return {"kind": kind, "title": title, "detail": detail, "mod": mod}
+
+
+def generate_insights(storage, days: int = 30, limit: int = 14) -> List[Dict[str, Any]]:
+    """Rule-based insight lines ("downloads up 37% vs last week"). No LLM used."""
+    summaries = all_mods_summary(storage, days)
+    today = datetime.date.today()
+    week_ago = today - datetime.timedelta(days=7)
+    insights: List[Dict[str, Any]] = []
+
+    for s in summaries:
+        name = s["name"]
+        d7 = s["delta_7d"]
+        d30 = s["delta_30d"]
+        avg_day = d30 / 30.0
+        deltas = s["deltas"]
+
+        if len(deltas) >= 7 and avg_day > 0 and d7 >= 0:
+            avg_7 = d7 / 7.0
+            ratio = avg_7 / avg_day
+            if ratio >= 1.5:
+                pct = round((ratio - 1) * 100)
+                insights.append(_mk_insight(
+                    "positive", f"{name}: momentum",
+                    f"Downloads are running {pct}% above your 30-day average over the last week "
+                    f"(+{d7:,} vs avg {avg_day:,.0f}/day).",
+                    name))
+            elif ratio <= 0.6:
+                pct = round((1 - ratio) * 100)
+                insights.append(_mk_insight(
+                    "negative", f"{name}: slowing down",
+                    f"Last week's gains are {pct}% below your 30-day average "
+                    f"(+{d7:,} vs avg {avg_day:,.0f}/day).", name))
+
+        for m in s["milestones"]:
+            if m["date"] >= week_ago:
+                insights.append(_mk_insight(
+                    "positive", f"{name} hit a milestone",
+                    f"Crossed {m['threshold']:,} downloads on {m['date']} — total now {s['total']:,}.", name))
+
+        bw = s["best_week"]
+        if bw and len(deltas) >= 14:
+            try:
+                bw_date = datetime.date.fromisoformat(bw["label"].replace("week of ", ""))
+            except Exception:  # noqa: BLE001
+                bw_date = None
+            if bw_date and bw_date >= week_ago and d7 >= bw["value"] * 0.8:
+                insights.append(_mk_insight(
+                    "positive", f"{name}: best week ever",
+                    f"Last week (+{d7:,}) is your best week on record for this mod.", name))
+
+        next_threshold = next((t for t in MILESTONES if s["total"] < t), None)
+        if next_threshold and avg_day > 0 and (next_threshold - s["total"]) <= s["total"] * 0.10:
+            eta = int(math.ceil((next_threshold - s["total"]) / avg_day))
+            insights.append(_mk_insight(
+                "info", f"{name}: milestone in sight",
+                f"About {eta} days from {next_threshold:,} downloads at the current pace.", name))
+
+        if len(deltas) >= 7 and all(v[1] > 0 for v in deltas[-7:]) and d7 > 0:
+            insights.append(_mk_insight(
+                "info", f"{name}: steady growth",
+                "Positive downloads every day for the last week.", name))
+
+        if d30 <= 0 and s["total"] > 0:
+            insights.append(_mk_insight(
+                "negative", f"{name}: flat",
+                "No download growth over the last 30 days.", name))
+
+    if summaries:
+        agg = aggregate_summary(summaries)
+        insights.append(_mk_insight(
+            "info", "All tracked mods",
+            f"{agg['count']} mods, {agg['total']:,} downloads, +{agg['delta_7d']:,} in 7 days, "
+            f"~{agg['next_week']:,} projected next week."))
+        fastest = max(summaries, key=lambda s: s["delta_7d"])
+        if fastest["delta_7d"] > 0:
+            insights.append(_mk_insight(
+                "positive", "Fastest-growing mod",
+                f"{fastest['name']} gained +{fastest['delta_7d']:,} downloads in the last 7 days.", fastest["name"]))
+
+    priority = {"positive": 0, "info": 1, "negative": 2}
+    insights.sort(key=lambda i: priority.get(i["kind"], 3))
+    return insights[:limit]

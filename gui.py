@@ -1302,6 +1302,102 @@ class ComparePage(QWidget):
             QMessageBox.warning(self, "Export failed", str(exc))
 
 
+class InsightCard(QFrame):
+    """Single insight line with a sentiment-colored accent bar."""
+
+    KIND_ICON = {"positive": "📈", "negative": "⚠️", "info": "💡"}
+    KIND_COLOR = {"positive": SUCCESS, "negative": ERROR, "info": ACCENT}
+
+    def __init__(self, insight: Dict[str, Any], parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("Panel")
+        kind = insight.get("kind", "info")
+        color = self.KIND_COLOR.get(kind, ACCENT)
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setSpacing(12)
+
+        bar = QFrame()
+        bar.setFixedWidth(4)
+        bar.setStyleSheet(f"background: {color}; border: none; border-radius: 2px;")
+        lay.addWidget(bar)
+
+        icon = QLabel(self.KIND_ICON.get(kind, "💡"))
+        icon.setStyleSheet("font-size: 20px; border: none; background: transparent;")
+        lay.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
+
+        col = QVBoxLayout()
+        col.setSpacing(2)
+        head = QHBoxLayout()
+        title = QLabel(insight.get("title", ""))
+        title.setStyleSheet(f"font-weight: 700; font-size: 13px; color: {color}; border: none; background: transparent;")
+        head.addWidget(title)
+        head.addStretch(1)
+        if insight.get("mod"):
+            mod = QLabel(insight["mod"])
+            mod.setStyleSheet(f"color: {GRAY}; font-size: 11px; border: none; background: transparent;")
+            head.addWidget(mod)
+        col.addLayout(head)
+        detail = QLabel(insight.get("detail", ""))
+        detail.setWordWrap(True)
+        detail.setStyleSheet("font-size: 12px; color: #334155; border: none; background: transparent;")
+        col.addWidget(detail)
+        lay.addLayout(col, 1)
+
+
+class InsightsPage(QWidget):
+    """Feed of rule-based insight cards generated from recent history."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        header = QHBoxLayout()
+        title = QLabel("Insights")
+        title.setObjectName("PageTitle")
+        hint = QLabel("Automated takeaways from your recent history (plain math, no AI).")
+        hint.setObjectName("Hint")
+        col = QVBoxLayout()
+        col.setSpacing(2)
+        col.addWidget(title)
+        col.addWidget(hint)
+        header.addLayout(col)
+        header.addStretch(1)
+        layout.addLayout(header)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        host = QWidget()
+        self.feed = QVBoxLayout(host)
+        self.feed.setContentsMargins(0, 0, 8, 0)
+        self.feed.setSpacing(10)
+        self.feed.addStretch(1)
+        self.scroll.setWidget(host)
+        layout.addWidget(self.scroll, 1)
+
+        self.placeholder = QLabel("No insights yet. Poll a few days of data first.")
+        self.placeholder.setObjectName("Hint")
+        self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+    def refresh(self, storage: Storage) -> None:
+        while self.feed.count():
+            item = self.feed.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        insights = analytics.generate_insights(storage, 30)
+        if not insights:
+            self.feed.addWidget(self.placeholder)
+        else:
+            for ins in insights:
+                self.feed.addWidget(InsightCard(ins))
+        self.feed.addStretch(1)
+
+
 class ActivityFeed(QFrame):
     """Sidebar panel listing recent download / comment events."""
 
@@ -1586,6 +1682,7 @@ class ModCard(QFrame):
 
 class DashboardPage(QWidget):
     regen_requested = pyqtSignal()
+    view_insights = pyqtSignal()
     SKIP_CHARTS = {"dashboard.png"}
     CHART_ORDER = [
         "downloads_per_day.png",
@@ -1639,6 +1736,9 @@ class DashboardPage(QWidget):
             self.stat_grid.addWidget(self.stat_cards[key], 1, i)
         layout.addLayout(self.stat_grid)
 
+        self._build_insights_strip()
+        layout.addWidget(self.insights_panel)
+
         body = QHBoxLayout()
         body.setSpacing(12)
         body.addWidget(self._build_charts_section(), 1)
@@ -1646,6 +1746,28 @@ class DashboardPage(QWidget):
         self.activity.setFixedWidth(320)
         body.addWidget(self.activity)
         layout.addLayout(body, 1)
+
+    def _build_insights_strip(self) -> None:
+        self.insights_panel = QFrame()
+        self.insights_panel.setObjectName("Panel")
+        ins = QHBoxLayout(self.insights_panel)
+        ins.setContentsMargins(14, 10, 14, 10)
+        ins.setSpacing(16)
+        label = QLabel("INSIGHTS")
+        label.setObjectName("SectionTitle")
+        ins.addWidget(label)
+        self.insight_items: List[QLabel] = []
+        for _ in range(3):
+            lab = QLabel("—")
+            lab.setWordWrap(True)
+            lab.setStyleSheet("font-size: 12px; color: #334155; background: transparent; border: none;")
+            self.insight_items.append(lab)
+            ins.addWidget(lab, 1)
+        view_all = QPushButton("View all")
+        view_all.setCursor(Qt.CursorShape.PointingHandCursor)
+        view_all.clicked.connect(self._request_insights)
+        ins.addWidget(view_all)
+        self.insights_panel.setVisible(False)
 
     def _build_charts_section(self) -> QWidget:
         wrap = QWidget()
@@ -1678,11 +1800,24 @@ class DashboardPage(QWidget):
     def refresh(self, storage: Optional[Storage] = None) -> None:
         if storage is not None:
             self._update_stats(storage)
+            self._update_insights(storage)
             self.activity.refresh(storage)
         self._reload_charts()
 
     def _request_regen(self) -> None:
         self.regen_requested.emit()
+
+    def _request_insights(self) -> None:
+        self.view_insights.emit()
+
+    def _update_insights(self, storage: Storage) -> None:
+        insights = analytics.generate_insights(storage, 30, limit=3)
+        self.insights_panel.setVisible(bool(insights))
+        for i, lab in enumerate(self.insight_items):
+            if i < len(insights):
+                lab.setText(f"🛈 {insights[i]['title']} — {insights[i]['detail']}")
+            else:
+                lab.setText("")
 
     def reload(self) -> None:
         self._reload_charts()
@@ -2588,6 +2723,7 @@ class TrackerWindow(QMainWindow):
         ("My Mods", "📦"),
         ("Analytics", "📊"),
         ("Compare", "⚖️"),
+        ("Insights", "💡"),
         ("History", "📈"),
         ("Comments", "💬"),
         ("Notifications", "🔔"),
@@ -2654,12 +2790,13 @@ class TrackerWindow(QMainWindow):
         self.mods = ModsPage(self.config, self.config_path)
         self.analytics = AnalyticsPage(self.config, self.config_path)
         self.compare = ComparePage(self.config, self.config_path)
+        self.insights = InsightsPage()
         self.history = HistoryPage()
         self.comments = CommentsPage()
         self.events = EventsPage()
         self.log_page = LogPage()
         self.settings = SettingsPage(self.config)
-        for page in (self.dashboard, self.mods, self.analytics, self.compare, self.history, self.comments, self.events, self.settings, self.log_page):
+        for page in (self.dashboard, self.mods, self.analytics, self.compare, self.insights, self.history, self.comments, self.events, self.settings, self.log_page):
             self.stack.addWidget(page)
         self.settings.saved.connect(self._on_settings_saved)
         self.settings.file_reload.connect(self._on_settings_saved)
@@ -2669,6 +2806,7 @@ class TrackerWindow(QMainWindow):
         self.mods.remove_requested.connect(self._remove_mod)
         self.mods.export_requested.connect(self._export_json)
         self.dashboard.regen_requested.connect(self._regenerate_charts)
+        self.dashboard.view_insights.connect(self._open_insights)
         self.events.open_url.connect(self._open_url)
         self.events.events_read.connect(self._update_badge)
         body.addWidget(self.stack, 1)
@@ -2859,6 +2997,7 @@ class TrackerWindow(QMainWindow):
         self.mods.refresh(self.storage)
         self.analytics.refresh(self.storage)
         self.compare.refresh(self.storage)
+        self.insights.refresh(self.storage)
         self.history.refresh(self.storage)
         self.comments.refresh(self.storage)
         self.events.refresh(self.storage)
@@ -2917,6 +3056,11 @@ class TrackerWindow(QMainWindow):
         self.sidebar.setCurrentRow(row)
         self.stack.setCurrentIndex(row)
         self.events.mark_all_seen()
+
+    def _open_insights(self) -> None:
+        row = next(i for i, (name, _) in enumerate(self.NAV) if name == "Insights")
+        self.sidebar.setCurrentRow(row)
+        self.stack.setCurrentIndex(row)
 
     def set_status(self, text: str) -> None:
         self.status_label.setText(text)

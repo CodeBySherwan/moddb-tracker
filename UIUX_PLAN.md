@@ -79,6 +79,10 @@ every step.
   two mod selectors (auto-sync so A ≠ B), 30/60/90-day range, head-to-head
   stats table (winner highlighted green), cumulative overlay chart, daily-gain
   chart, and a "daily advantage" diff chart; PNG export.
+- **AI insights** ✅ `analytics.generate_insights` + `InsightsPage` + dashboard
+  strip: rule-based takeaways (momentum vs 30-day average, milestone reached,
+  best week ever, flat/declining, next milestone ETA, steady growth, fastest
+  mod, aggregate projection) with positive/info/negative cards.
 
 ## Architecture
 
