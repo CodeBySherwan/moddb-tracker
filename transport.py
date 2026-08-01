@@ -80,11 +80,8 @@ def get_session() -> cfr.Session:
     return _session
 
 
-def get_page(url: str, *, params: Optional[Dict[str, Any]] = None, json: bool = False) -> Any:
-    """Fetch `url` and return a BeautifulSoup object (or parsed JSON).
-
-    Mirrors the signature of ``moddb.utils.get_page`` so it can be patched in.
-    """
+def _fetch(url: str, params: Optional[Dict[str, Any]] = None):
+    """Cloudflare-proof GET; returns the curl_cffi response or raises."""
     session = get_session()
     params = dict(params) if params else None
 
@@ -96,11 +93,7 @@ def get_page(url: str, *, params: Optional[Dict[str, Any]] = None, json: bool = 
             if _is_challenge(resp):
                 raise RuntimeError(f"Cloudflare challenge (HTTP {resp.status_code}) for {url}")
             resp.raise_for_status()
-            if json:
-                return resp.json()
-            import moddb
-
-            return moddb.soup(resp.text)
+            return resp
         except Exception as exc:  # noqa: BLE001 - be resilient, retry then surface
             last_error = exc
             logger.warning("Request failed for %s (attempt %d/%d): %s", url, attempt, MAX_ATTEMPTS, exc)
@@ -110,6 +103,24 @@ def get_page(url: str, *, params: Optional[Dict[str, Any]] = None, json: bool = 
         time.sleep(REQUEST_DELAY)
 
     raise RuntimeError(f"Failed to fetch {url} after {MAX_ATTEMPTS} attempts: {last_error}")
+
+
+def get_page(url: str, *, params: Optional[Dict[str, Any]] = None, json: bool = False) -> Any:
+    """Fetch `url` and return a BeautifulSoup object (or parsed JSON).
+
+    Mirrors the signature of ``moddb.utils.get_page`` so it can be patched in.
+    """
+    resp = _fetch(url, params=params)
+    if json:
+        return resp.json()
+    import moddb
+
+    return moddb.soup(resp.text)
+
+
+def get_raw(url: str, *, params: Optional[Dict[str, Any]] = None) -> str:
+    """Fetch `url` and return the raw response text."""
+    return _fetch(url, params=params).text
 
 
 def patch_moddb() -> None:

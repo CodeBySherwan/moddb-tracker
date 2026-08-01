@@ -73,6 +73,36 @@ def daily_totals_range(series: List[Tuple[Date, int]], days: int) -> List[Tuple[
     return out
 
 
+def stats_history_series(storage, mod_id: int) -> List[Dict[str, Any]]:
+    """Backfilled per-day rows from the ModDB stats page (oldest first)."""
+    return [dict(r) for r in storage.stats_history_for(mod_id)]
+
+
+def stats_history_daily(storage, mod_id: int, key: str = "visits") -> List[Tuple[Date, int]]:
+    """(day, per-day count) for one backfilled series, missing days dropped."""
+    out: List[Tuple[Date, int]] = []
+    for r in storage.stats_history_for(mod_id):
+        value = r[key]
+        day = _to_date(r["day"])
+        if value is not None and day is not None:
+            out.append((day, int(value)))
+    return out
+
+
+def stats_history_cumulative(storage, mod_id: int, key: str = "visits") -> List[Tuple[Date, int]]:
+    """Cumulative running total for one backfilled series (all days present)."""
+    out: List[Tuple[Date, int]] = []
+    running = 0
+    for r in storage.stats_history_for(mod_id):
+        value = r[key]
+        if value is not None:
+            running += int(value)
+        day = _to_date(r["day"])
+        if day is not None:
+            out.append((day, running))
+    return out
+
+
 def aligned_totals(
     series_a: List[Tuple[Date, int]], series_b: List[Tuple[Date, int]], days: int
 ) -> List[Tuple[Date, int, int]]:
@@ -112,15 +142,17 @@ def _best_slice(deltas: List[Tuple[Date, int]], key, fmt) -> Optional[Dict[str, 
 
 
 def milestones(series: List[Tuple[Date, int]]) -> List[Dict[str, Any]]:
-    """Dates when each download threshold was crossed."""
+    """Dates when each download threshold was crossed.
+
+    Walks the sorted series directly so a plateau keeps the first date the
+    threshold was actually reached.
+    """
     out: List[Dict[str, Any]] = []
-    by_value = {total: day for day, total in series}
-    totals = sorted(by_value)
     for threshold in MILESTONES:
-        if totals and totals[-1] >= threshold:
-            idx = next((i for i, t in enumerate(totals) if t >= threshold), None)
-            if idx is not None:
-                out.append({"threshold": threshold, "date": by_value[totals[idx]]})
+        for day, total in series:
+            if total >= threshold:
+                out.append({"threshold": threshold, "date": day})
+                break
     return out
 
 
@@ -156,7 +188,8 @@ def mod_summary(storage, mod_id: int, days: int = 90) -> Dict[str, Any]:
     start = series[0][1] if series else 0
     delta_7d = sum(v for d, v in deltas if (datetime.date.today() - d).days < 7)
     delta_30d = sum(v for d, v in deltas if (datetime.date.today() - d).days < 30)
-    growth_pct = round(delta_30d / start * 100, 1) if start else 0.0
+    delta_Nd = sum(v for d, v in deltas if (datetime.date.today() - d).days < days)
+    growth_pct = round(delta_Nd / start * 100, 1) if start else 0.0
     avg_per_day = round(delta_30d / 30, 1) if deltas else 0.0
     best_day = _best_slice(deltas, lambda p: p[1], lambda d: d.isoformat())
     best_week = _best_slice(weeks, lambda p: p[1], lambda d: f"week of {d.isoformat()}")
@@ -387,5 +420,61 @@ def generate_insights(storage, days: int = 30, limit: int = 14) -> List[Dict[str
                 f"{fastest['name']} gained +{fastest['delta_7d']:,} downloads in the last 7 days.", fastest["name"]))
 
     priority = {"positive": 0, "info": 1, "negative": 2}
+
+    # cap contributions per mod so a single big mod can't dominate the strip
+    max_per_mod = 2
+    per_mod: Dict[str, List[Dict[str, Any]]] = {}
+    keep: List[Dict[str, Any]] = []
+    for ins in insights:
+        mod = ins.get("mod")
+        if mod is None:
+            keep.append(ins)
+            continue
+        per_mod.setdefault(mod, []).append(ins)
+    for bucket in per_mod.values():
+        bucket.sort(key=lambda i: priority.get(i["kind"], 3))
+        keep.extend(bucket[:max_per_mod])
+    insights = keep
+
     insights.sort(key=lambda i: priority.get(i["kind"], 3))
     return insights[:limit]
+
+
+# --------------------------------------------------------------------------
+# dashboard helpers (live pyqtgraph data feeds)
+# --------------------------------------------------------------------------
+
+def dashboard_downloads_per_day(storage, days: int = 30) -> List[Tuple[Date, int]]:
+    """Downloads gained per day, summed across all tracked mods."""
+    return storage.daily_download_deltas(days)
+
+
+def dashboard_total_downloads(storage, days: int = 30) -> List[Tuple[Date, int]]:
+    """Cumulative total downloads across all tracked mods, filled per day."""
+    deltas = dict(storage.daily_download_deltas(days))
+    start = datetime.date.today() - datetime.timedelta(days=days - 1)
+    out: List[Tuple[Date, int]] = []
+    run = 0
+    day = start
+    while day <= datetime.date.today():
+        run += deltas.get(day, 0)
+        out.append((day, run))
+        day += datetime.timedelta(days=1)
+    return out
+
+
+def dashboard_mod_overview(storage, days: int = 30, top: int = 5) -> List[Dict[str, Any]]:
+    """Summaries for the top-`top` mods (by total downloads), for the overview chart."""
+    return all_mods_summary(storage, days)[:top]
+
+
+def dashboard_comment_activity(storage, days: int = 30) -> List[Tuple[Date, int]]:
+    """Comments posted per day across all tracked mods."""
+    out: List[Tuple[Date, int]] = []
+    for row in storage.comment_counts_per_day(days=days):
+        try:
+            day = Date.fromisoformat(row["day"])
+        except Exception:  # noqa: BLE001
+            continue
+        out.append((day, int(row["n"] or 0)))
+    return out

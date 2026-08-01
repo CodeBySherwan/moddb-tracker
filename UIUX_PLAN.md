@@ -97,6 +97,20 @@ every step.
   show/hide stat cards, insights, charts and activity, plus move the activity
   feed between the right side and below the charts; persisted in
   `ui.dashboard` config and applied on relaunch.
+- **Full-history backfill** ✅ country stats were investigated and confirmed
+  NOT available on any public ModDB page (full HTML analysis of `/stats`,
+  `/downloads` and member pages found no per-country data). Pivoted to a
+  better data source discovered during that research: the public
+  `<item>/stats` page embeds complete **daily** counters (visitors /
+  downloads / videos / images / articles, often back to release) in an
+  AmCharts JSON blob. `tracker.parse_stats_history` / `fetch_stats_history` /
+  `backfill_stats_history` + `transport.get_raw` pull that history into a new
+  `stats_history` table (`storage.replace_stats_history` / coverage helpers);
+  `analytics.stats_history_*` compute series. The **History** page now has two
+  tabs — "ModDB stats history" (coverage label, cumulative visits/downloads
+  plot, per-day table) and "Poll snapshots" (existing table) — with "Backfill
+  this mod" and "Backfill all mods" buttons running in the background worker.
+- Still open: hourly downloads, Steam-like profile.
 
 ## Architecture
 

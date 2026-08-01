@@ -4,8 +4,9 @@ Tables
 ------
 mods        the tracked mods (discovered from the member profile or manual list)
 snapshots   one row per poll per mod with current counters
-comments    every comment seen on a tracked mod (comment id is the primary key)
+comments      every comment seen on a tracked mod (comment id is the primary key)
 events      notification-worthy events (downloads, comments, replies)
+stats_history  per-day counters backfilled from the public ModDB stats page
 meta        small key/value store (last poll, member name, ...)
 """
 
@@ -69,6 +70,18 @@ CREATE TABLE IF NOT EXISTS events (
     seen INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_events_notified ON events(notified);
+
+CREATE TABLE IF NOT EXISTS stats_history (
+    mod_id INTEGER NOT NULL REFERENCES mods(id),
+    day TEXT NOT NULL,
+    downloads INTEGER,
+    visits INTEGER,
+    videos INTEGER,
+    images INTEGER,
+    articles INTEGER,
+    PRIMARY KEY (mod_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_stats_history_mod ON stats_history(mod_id, day);
 
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -257,6 +270,64 @@ class Storage:
             "SELECT * FROM comments ORDER BY posted_at DESC LIMIT ?", (limit,)
         ).fetchall()
 
+    # ---- stats history (backfilled from the ModDB stats page) ----------
+    STATS_HISTORY_COLS = ("downloads", "visits", "videos", "images", "articles")
+
+    def replace_stats_history(self, mod_id: int, rows: Iterable[Dict[str, Any]]) -> None:
+        """Replace the backfilled per-day history for a mod with `rows`.
+
+        Each row must have a ``day`` (ISO date) plus any subset of the
+        :attr:`STATS_HISTORY_COLS` counters. Missing counters become NULL.
+        """
+        rows = list(rows)
+        with self.conn:
+            self.conn.execute("DELETE FROM stats_history WHERE mod_id = ?", (mod_id,))
+            if rows:
+                self.conn.executemany(
+                    "INSERT INTO stats_history(mod_id, day, downloads, visits, videos, images, articles) "
+                    "VALUES(?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        (
+                            mod_id,
+                            r["day"],
+                            r.get("downloads"),
+                            r.get("visits"),
+                            r.get("videos"),
+                            r.get("images"),
+                            r.get("articles"),
+                        )
+                        for r in rows
+                    ],
+                )
+
+    def stats_history_for(self, mod_id: int) -> List[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM stats_history WHERE mod_id = ? ORDER BY day ASC", (mod_id,)
+        ).fetchall()
+
+    def stats_history_coverage(self, mod_id: int) -> Dict[str, Any]:
+        """Coverage info for the backfilled history of one mod."""
+        rows = self.stats_history_for(mod_id)
+        if not rows:
+            return {"days": 0, "first": None, "last": None, "counts": {}}
+        counts = {col: 0 for col in self.STATS_HISTORY_COLS}
+        for r in rows:
+            for col in counts:
+                if r[col] is not None:
+                    counts[col] += 1
+        return {
+            "days": len(rows),
+            "first": rows[0]["day"],
+            "last": rows[-1]["day"],
+            "counts": counts,
+        }
+
+    def has_stats_history(self, mod_id: int) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM stats_history WHERE mod_id = ? LIMIT 1", (mod_id,)
+        ).fetchone()
+        return row is not None
+
     # ---- events -------------------------------------------------------
     def add_event(self, kind: str, message: str, mod_id: Optional[int] = None, mod_name: Optional[str] = None, url: Optional[str] = None) -> None:
         self.conn.execute(
@@ -353,13 +424,32 @@ class Storage:
 
     # ---- stats helpers for charts ------------------------------------
     def totals_per_mod(self) -> List[Dict[str, Any]]:
-        """Latest snapshot per mod, as dicts (incl. comment/reply counts)."""
+        """Latest snapshot per mod, as dicts (incl. comment/reply counts).
+
+        ``replies`` counts comments whose parent comment was authored by the
+        tracked member ("replies to me"), matching ``tracker.classify_comment``.
+        The raw thread-nested count stays available as ``thread_replies``.
+        """
+        names = [n for n in (self.meta_get("member_name"), self.meta_get("member_name_id")) if n]
+        if names:
+            placeholders = ",".join("?" for _ in names)
+            replies_sql = f"""(
+                SELECT COUNT(*) FROM comments c
+                LEFT JOIN comments p ON p.id = c.parent_id
+                WHERE c.mod_id = m.id AND c.parent_id IS NOT NULL
+                  AND lower(p.author) IN ({placeholders})
+            )"""
+            args: Tuple = tuple(n.lower() for n in names)
+        else:
+            replies_sql = "(0)"
+            args = ()
         rows = self.conn.execute(
-            """
+            f"""
             SELECT m.id, m.name, m.name_id, m.url, s.downloads_total, s.downloads_today,
                    s.visits, s.visits_today, s.rank, s.rank_total, s.watchers, s.rating, s.files,
                    (SELECT COUNT(*) FROM comments c WHERE c.mod_id = m.id) AS comments,
-                   (SELECT COUNT(*) FROM comments c WHERE c.mod_id = m.id AND c.parent_id IS NOT NULL) AS replies,
+                   {replies_sql} AS replies,
+                   (SELECT COUNT(*) FROM comments c WHERE c.mod_id = m.id AND c.parent_id IS NOT NULL) AS thread_replies,
                    m.favorite
             FROM mods m
             JOIN snapshots s ON s.id = (
@@ -368,7 +458,8 @@ class Storage:
             )
             WHERE m.active = 1
             ORDER BY s.downloads_total DESC
-            """
+            """,
+            args,
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -479,6 +570,7 @@ class Storage:
             "snapshots": [dict(r) for r in self.conn.execute("SELECT * FROM snapshots").fetchall()],
             "comments": [dict(r) for r in self.conn.execute("SELECT * FROM comments").fetchall()],
             "events": [dict(r) for r in self.conn.execute("SELECT * FROM events").fetchall()],
+            "stats_history": [dict(r) for r in self.conn.execute("SELECT * FROM stats_history").fetchall()],
         }
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2, default=str)

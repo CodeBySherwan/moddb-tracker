@@ -19,6 +19,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -61,6 +62,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "logs": "logs",
     },
     "ui": {
+        "fullscreen": True,
+        "poll_on_open": True,
         "mods_sort": 0,
         "mods_filter": "",
         "analytics_days": 60,
@@ -158,6 +161,103 @@ def parse_downloads_stats(html) -> Dict[str, Any]:
         else:
             stats[key] = text
     return stats
+
+
+STATS_SERIES_KEYS = {
+    "Visitors": "visits",
+    "Downloads": "downloads",
+    "Videos": "videos",
+    "Images": "images",
+    "Articles": "articles",
+}
+
+
+def parse_stats_history(html_text: str) -> Dict[str, List[Tuple[str, int]]]:
+    """Extract the per-day series embedded in a ModDB ``/stats`` page.
+
+    The chart is rendered from a JSON blob inside
+    ``AmCharts.makeChart("chartdivmod", {...})``; each dataset is a list of
+    ``{"date": "YYYY-MM-DD", "total": "N"}`` per-day counters.
+    """
+    match = re.search(r'AmCharts\.makeChart\(\s*"chartdivmod"\s*,\s*(\{)', html_text)
+    if not match:
+        return {}
+    start = match.start(1)
+    depth = 0
+    end = None
+    for i in range(start, len(html_text)):
+        ch = html_text[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    if end is None:
+        return {}
+    raw = html_text[start:end]
+    try:
+        cfg = json.loads(raw)
+    except ValueError:
+        cfg = json.loads(re.sub(r",\s*([}\]])", r"\1", raw))
+
+    out: Dict[str, List[Tuple[str, int]]] = {}
+    for ds in cfg.get("dataSets", []):
+        key = STATS_SERIES_KEYS.get(ds.get("title", ""))
+        if key is None:
+            continue
+        series: List[Tuple[str, int]] = []
+        for point in ds.get("dataProvider", []):
+            try:
+                series.append((point["date"], int(point["total"])))
+            except (KeyError, TypeError, ValueError):
+                continue
+        out[key] = series
+    return out
+
+
+def fetch_stats_history(url: str) -> Dict[str, List[Tuple[str, int]]]:
+    """Fetch and parse the public stats page for an item (``<url>/stats``)."""
+    return parse_stats_history(transport.get_raw(f"{url.rstrip('/')}/stats"))
+
+
+def backfill_stats_history(storage: Storage, mod: Dict[str, Any]) -> Dict[str, Any]:
+    """Backfill the per-day stats history for one mod from its stats page."""
+    series = fetch_stats_history(mod["url"])
+    by_day: Dict[str, Dict[str, Any]] = {}
+    for key, points in series.items():
+        for day, value in points:
+            by_day.setdefault(day, {"day": day})[key] = value
+    rows = [by_day[d] for d in sorted(by_day)]
+    storage.replace_stats_history(mod["id"], rows)
+    coverage = storage.stats_history_coverage(mod["id"])
+    coverage["series"] = {key: len(points) for key, points in series.items()}
+    logger.info(
+        "Backfilled %s: %d day(s) from %s to %s",
+        mod["name"],
+        coverage["days"],
+        coverage["first"],
+        coverage["last"],
+    )
+    return coverage
+
+
+def backfill_all_stats_history(storage: Storage, config: Dict[str, Any]) -> str:
+    """Backfill stats history for every active tracked mod."""
+    mods = storage.get_mods(active_only=True)
+    if not mods:
+        return "No tracked mods."
+    lines: List[str] = []
+    for mod in mods:
+        target = dict(mod)
+        try:
+            coverage = backfill_stats_history(storage, target)
+            lines.append(f"{target['name']}: {coverage['days']} day(s)")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Backfill failed for %s: %s", target["name"], exc)
+            lines.append(f"{target['name']}: failed ({exc})")
+    return "\n".join(lines)
 
 
 def page_type_for(url: str) -> str:
@@ -445,38 +545,39 @@ def snapshot_mod(storage: Storage, mod: Dict[str, Any], config: Dict[str, Any], 
         fetch_pages=2,
     )
 
-    if notify:
-        m_names = member_names(storage)
-        for comment in new_comments:
-            if comment["author"].lower() in m_names:
-                continue  # our own comment
-            kind = classify_comment(comment, m_names)
-            snippet = (comment["content"] or "")[:160].replace("\n", " ")
-            storage.add_event(
-                kind,  # "reply" or "comment"
-                f"{comment['author']}: {snippet}",
-                mod_id,
-                mod_name,
-                mod_url,
-            )
-            if kind == "reply":
-                if config["poll"]["notify_on_replies"]:
-                    events.append(
-                        {
-                            "title": f"New reply on {mod_name}",
-                            "message": f"{comment['author']}: {snippet}",
-                            "url": mod_url,
-                        }
-                    )
-            else:
-                if config["poll"]["notify_on_comments"]:
-                    events.append(
-                        {
-                            "title": f"New comment on {mod_name}",
-                            "message": f"{comment['author']}: {snippet}",
-                            "url": mod_url,
-                        }
-                    )
+    m_names = member_names(storage)
+    for comment in new_comments:
+        if comment["author"].lower() in m_names:
+            continue  # our own comment
+        kind = classify_comment(comment, m_names)
+        snippet = (comment["content"] or "")[:160].replace("\n", " ")
+        storage.add_event(
+            kind,  # "reply" or "comment"
+            f"{comment['author']}: {snippet}",
+            mod_id,
+            mod_name,
+            mod_url,
+        )
+        if not notify:
+            continue
+        if kind == "reply":
+            if config["poll"]["notify_on_replies"]:
+                events.append(
+                    {
+                        "title": f"New reply on {mod_name}",
+                        "message": f"{comment['author']}: {snippet}",
+                        "url": mod_url,
+                    }
+                )
+        else:
+            if config["poll"]["notify_on_comments"]:
+                events.append(
+                    {
+                        "title": f"New comment on {mod_name}",
+                        "message": f"{comment['author']}: {snippet}",
+                        "url": mod_url,
+                    }
+                )
 
     logger.info(
         "Polled %s: total=%s today=%s delta=%s new_comments=%s",
