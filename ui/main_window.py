@@ -5,7 +5,7 @@ from pathlib import Path
 
 import argparse, datetime, json, logging, traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
-from PyQt6.QtCore import QObject, QProcess, QSize, QThread, QTimer, QUrl, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, QProcess, QSize, QThread, QTimer, QUrl, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import QApplication, QCheckBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QStackedWidget, QSystemTrayIcon, QToolButton, QVBoxLayout, QWidget
 import analytics
@@ -23,6 +23,7 @@ VERSION = "2.1.0"
 from ui.pages import (  # noqa: E402
     AchievementsPage,
     AnalyticsPage,
+    ChartsPage,
     CommentsPage,
     ComparePage,
     DashboardPage,
@@ -112,9 +113,9 @@ class GuiLogHandler(logging.Handler):
 
 
 def show_window(window: "TrackerWindow") -> None:
-    """Show the main window, full screen unless the user opted out."""
+    """Show the main window, maximized (keeps the native title bar) unless opted out."""
     if window.config.get("ui", {}).get("fullscreen", True):
-        window.showFullScreen()
+        window.showMaximized()
     else:
         window.show()
 
@@ -180,6 +181,7 @@ class TrackerWindow(QMainWindow):
         ("Dashboard", "home"),
         ("My Mods", "package"),
         ("Analytics", "chart"),
+        ("Charts", "grid"),
         ("Compare", "scale"),
         ("Insights", "bulb"),
         ("Achievements", "trophy"),
@@ -198,7 +200,6 @@ class TrackerWindow(QMainWindow):
         self.storage = Storage(self.config["paths"]["db"])
         self.worker: Optional[TrackerWorker] = None
         self._stopping = False
-        self._quit_requested = False
         self._tray_hint_shown = False
         self.tray: Optional[QSystemTrayIcon] = None
 
@@ -250,6 +251,7 @@ class TrackerWindow(QMainWindow):
         self.dashboard = DashboardPage(self.config, self.config_path)
         self.mods = ModsPage(self.config, self.config_path)
         self.analytics = AnalyticsPage(self.config, self.config_path)
+        self.charts = ChartsPage(self.config, self.config_path)
         self.compare = ComparePage(self.config, self.config_path)
         self.insights = InsightsPage()
         self.achievements = AchievementsPage()
@@ -259,7 +261,7 @@ class TrackerWindow(QMainWindow):
         self.log_page = LogPage()
         self.settings = SettingsPage(self.config)
         self.search_page = SearchResultsPage()
-        for page in (self.dashboard, self.mods, self.analytics, self.compare, self.insights, self.achievements, self.history, self.comments, self.events, self.settings, self.log_page):
+        for page in (self.dashboard, self.mods, self.analytics, self.charts, self.compare, self.insights, self.achievements, self.history, self.comments, self.events, self.settings, self.log_page):
             self.stack.addWidget(page)
         self.stack.addWidget(self.search_page)
         self.search_page.open_url.connect(self._open_url)
@@ -271,8 +273,8 @@ class TrackerWindow(QMainWindow):
         self.mods.favorite_toggled.connect(self._toggle_favorite)
         self.mods.remove_requested.connect(self._remove_mod)
         self.mods.export_requested.connect(self._export_json)
-        self.dashboard.regen_requested.connect(self._regenerate_charts)
         self.dashboard.view_insights.connect(self._open_insights)
+        self.charts.regen_requested.connect(self._regenerate_charts)
         self.events.open_url.connect(self._open_url)
         self.events.events_read.connect(self._update_badge)
         self.history.backfill_requested.connect(self._backfill_mod)
@@ -402,7 +404,7 @@ class TrackerWindow(QMainWindow):
         self.tray_menu_rescan = QAction("Rescan profile", self)
         self.tray_menu_rescan.triggered.connect(self._rescan)
         self.tray_menu_quit = QAction("Quit", self)
-        self.tray_menu_quit.triggered.connect(self._request_quit)
+        self.tray_menu_quit.triggered.connect(self.close)
         menu.addAction(self.tray_menu_show)
         menu.addAction(self.tray_menu_poll)
         menu.addAction(self.tray_menu_rescan)
@@ -438,23 +440,22 @@ class TrackerWindow(QMainWindow):
                 3000,
             )
 
-    def _request_quit(self) -> None:
-        self._quit_requested = True
-        if self.tray is not None:
-            self.tray.hide()
-        self.close()
+    def changeEvent(self, event) -> None:  # noqa: N802
+        if event.type() == QEvent.Type.WindowStateChange and self.isMinimized():
+            if self.tray is not None and self.config.get("tray", {}).get("minimize_to_tray", True):
+                event.ignore()
+                self.hide_to_tray()
+                return
+        super().changeEvent(event)
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        tray_active = self.tray is not None and self.config.get("tray", {}).get("close_to_tray", True)
-        if not self._quit_requested and tray_active:
-            event.ignore()
-            self.hide_to_tray()
-            return
         self._stopping = True
         self.auto_timer.stop()
         if self.worker is not None and self.worker.isRunning():
             self.worker.wait(5000)
         self.storage.close()
+        if self.tray is not None:
+            self.tray.hide()
         event.accept()
 
     # ---- logging --------------------------------------------------------
@@ -470,6 +471,7 @@ class TrackerWindow(QMainWindow):
         self.dashboard.refresh(self.storage)
         self.mods.refresh(self.storage)
         self.analytics.refresh(self.storage)
+        self.charts.refresh(self.storage)
         self.compare.refresh(self.storage)
         self.insights.refresh(self.storage)
         self.achievements.refresh(self.storage)
@@ -502,6 +504,7 @@ class TrackerWindow(QMainWindow):
         self.dashboard._apply_layout()
         self.mods._config = self.config
         self.analytics._config = self.config
+        self.charts._config = self.config
         self.compare._config = self.config
         self._restart_auto_timer()
         self.refresh_all()
@@ -517,7 +520,7 @@ class TrackerWindow(QMainWindow):
         self.charts_btn.setEnabled(not busy)
         self.refresh_btn.setEnabled(not busy)
         self.export_btn.setEnabled(not busy)
-        self.dashboard.regen_btn.setEnabled(not busy)
+        self.charts.regen_btn.setEnabled(not busy)
         self.busy_bar.setVisible(busy)
         if busy:
             self.set_status(label or "Working...")
@@ -614,7 +617,6 @@ class TrackerWindow(QMainWindow):
             removed = reset_app_data(self.config)
             save_config(json.loads(json.dumps(DEFAULT_CONFIG)), self.config_path)
             logger.info("App data reset: %d file(s) removed", len(removed))
-            self._quit_requested = True
             QProcess.startDetached(sys.executable, [str(Path(__file__).resolve()), "--config", self.config_path])
             QMessageBox.information(
                 self, "Data deleted",

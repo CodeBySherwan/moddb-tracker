@@ -53,7 +53,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_toasts": 5,
     },
     "tray": {
-        "close_to_tray": True,
+        "minimize_to_tray": True,
         "start_minimized": False,
     },
     "paths": {

@@ -18,6 +18,7 @@ from ui.main_window import FirstRunDialog, TrackerWindow, main, show_window  # n
 from ui.pages import (  # noqa: E402
     AchievementsPage,
     AnalyticsPage,
+    ChartsPage,
     CommentsPage,
     ComparePage,
     DashboardPage,
@@ -36,6 +37,7 @@ __all__ = [
     "AchievementsPage",
     "AnalyticsPage",
     "BadgeCard",
+    "ChartsPage",
     "CommentsPage",
     "ComparePage",
     "DashboardPage",

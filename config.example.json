@@ -14,7 +14,7 @@
     "max_toasts": 5
   },
   "tray": {
-    "close_to_tray": true,
+    "minimize_to_tray": true,
     "start_minimized": false
   },
   "paths": {

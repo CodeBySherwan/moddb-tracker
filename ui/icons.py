@@ -409,11 +409,20 @@ def _ilock(p: QPainter, r: QRectF) -> None:
     p.drawLine(QPointF(cx, y + h * 0.62), QPointF(cx, y + h * 0.62))
 
 
+def _igrid(p: QPainter, r: QRectF) -> None:
+    x, y, w, h = r.x(), r.y(), r.width(), r.height()
+    for fy in (0.2, 0.5, 0.8):
+        p.drawLine(QPointF(x + w * 0.2, y + h * fy), QPointF(x + w * 0.8, y + h * fy))
+    for fx in (0.2, 0.5, 0.8):
+        p.drawLine(QPointF(x + w * fx, y + h * 0.2), QPointF(x + w * fx, y + h * 0.8))
+
+
 _ICON_DRAW: Dict[str, Callable[[QPainter, QRectF], None]] = {
     "dot": _idot,
     "home": _ihome,
     "package": _ipackage,
     "chart": _ichart,
+    "grid": _igrid,
     "scale": _iscale,
     "bulb": _ibulb,
     "trophy": _itrophy,
