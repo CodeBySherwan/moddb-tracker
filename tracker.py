@@ -606,6 +606,11 @@ def run_poll(storage: Storage, config: Dict[str, Any], notify: bool = True) -> i
     for mod in mods:
         events = snapshot_mod(storage, dict(mod), config, notify=notify)
         all_events.extend(events)
+        try:
+            if not storage.has_stats_history(int(mod["id"])):
+                backfill_stats_history(storage, dict(mod))
+        except Exception as exc:  # noqa: BLE001 - history backfill is best-effort
+            logger.warning("History backfill skipped for %s: %s", mod["name"], exc)
 
     if notify:
         try:
@@ -634,6 +639,11 @@ def run_init(storage: Storage, config: Dict[str, Any]) -> int:
     logger.info("Initialising baseline for %d mod(s)...", len(mods))
     for mod in mods:
         snapshot_mod(storage, mod, config, notify=False)  # baseline, no notifications
+        try:
+            if not storage.has_stats_history(int(mod["id"])):
+                backfill_stats_history(storage, mod)
+        except Exception as exc:  # noqa: BLE001 - history backfill is best-effort
+            logger.warning("History backfill skipped for %s: %s", mod["name"], exc)
 
     try:
         import charts

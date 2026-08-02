@@ -274,6 +274,21 @@ def _date_to_ts(d: datetime.date) -> float:
     return datetime.datetime.combine(d, datetime.time()).timestamp()
 
 
+class _PlainBar(pg.BarGraphItem):
+    """BarGraphItem that does not register as a plot-data curve.
+
+    pyqtgraph 0.14's ``PlotItem`` treats anything where
+    ``implements('plotData')`` is true as a curve and calls
+    ``setDownsampling``/``setFftMode`` on it during ``updateDownsampling``
+    /``updateSpectrumMode``; ``BarGraphItem`` lacks those methods, which
+    crashes with an AttributeError. Reporting no interface keeps bars
+    rendering exactly the same while excluding them from curve management.
+    """
+
+    def implements(self, interface: str) -> bool:  # noqa: D102
+        return False
+
+
 class PlotCard(QFrame):
     """Panel with an interactive pyqtgraph chart and a hover readout line."""
 
@@ -327,7 +342,7 @@ class PlotCard(QFrame):
         ts = [_date_to_ts(d) for d in dates]
         brush = QColor(color)
         brush.setAlpha(alpha)
-        item = pg.BarGraphItem(
+        item = _PlainBar(
             x=ts, height=values, width=86400 * 0.68,
             brush=pg.mkBrush(brush), pen=pg.mkPen(color),
         )

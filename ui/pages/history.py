@@ -95,6 +95,11 @@ class HistoryPage(QWidget):
                 self.mod_combo.setCurrentIndex(idx)
         self.mod_combo.blockSignals(False)
         self._populate()
+        # default to the tab that actually has data so History never looks empty
+        if any(storage.has_stats_history(int(m["id"])) for m in storage.get_mods(active_only=True)):
+            self.tabs.setCurrentIndex(0)
+        else:
+            self.tabs.setCurrentIndex(1)
 
     def _request_backfill(self) -> None:
         mod_id = self.mod_combo.currentData()
