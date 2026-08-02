@@ -113,8 +113,9 @@ class ChartsPage(QWidget):
         totals = analytics.dashboard_total_downloads(storage, days)
         overview = analytics.dashboard_mod_overview(storage, days, top=5)
         comments = analytics.dashboard_comment_activity(storage, days)
+        has_overview = any(s["series"] for s in overview)
 
-        if not (per_day or overview or comments or any(v for _, v in totals)):
+        if not (per_day or has_overview or comments or any(v for _, v in totals)):
             self.charts_grid.addWidget(self.placeholder, 0, 0)
             return
 
@@ -138,6 +139,8 @@ class ChartsPage(QWidget):
 
         plot_mods.set_ylabel("Downloads")
         for i, s in enumerate(overview):
+            if not s["series"]:
+                continue
             color = LINE_COLORS[i % len(LINE_COLORS)]
             plot_mods.add_line(*zip(*s["series"]), color, width=2, name=s["name"])
 
