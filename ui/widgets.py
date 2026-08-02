@@ -694,7 +694,8 @@ class ModCard(QFrame):
         self._name.setToolTip(name)
         self._refresh_name_elide()
 
-        self._dl.setText(format_num(totals.get("downloads_total")))
+        raw_total = totals.get("downloads_total")
+        self._dl.setText("—" if raw_total is None else format_num(raw_total))
         self._dl_cap.setText(f"DOWNLOADS · +{format_num(totals.get('downloads_today'))} TODAY")
         if delta_7d > 0:
             self._growth.setText(f"▲ +{delta_7d:,} last 7 days")

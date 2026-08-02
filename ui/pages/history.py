@@ -1,8 +1,8 @@
 """ui/pages/history.py"""
 
 from typing import Any, List, Optional
-from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QTabWidget, QVBoxLayout, QWidget
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QSplitter, QTabWidget, QVBoxLayout, QWidget
 import analytics
 from storage import Storage
 from ui.theme import ACCENT, SUCCESS
@@ -58,16 +58,23 @@ class HistoryPage(QWidget):
         v = QVBoxLayout(stats_tab)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(10)
+        splitter = QSplitter()
+        splitter.setOrientation(Qt.Orientation.Vertical)
         self.plot_full = PlotCard(
             "Daily counts from ModDB", "Cumulative visits and downloads over the backfilled history"
         )
         self.plot_full.set_ylabel("count")
-        v.addWidget(self.plot_full)
+        splitter.addWidget(self.plot_full)
         self.stats_table = make_table(
             ["Day", "Visits", "Downloads", "Videos", "Images", "Articles"]
         )
         self.stats_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        v.addWidget(self.stats_table, 1)
+        self.stats_table.setMinimumHeight(160)
+        splitter.addWidget(self.stats_table)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([340, 240])
+        v.addWidget(splitter, 1)
         self.tabs.addTab(stats_tab, "ModDB stats history")
 
         snap_tab = QWidget()

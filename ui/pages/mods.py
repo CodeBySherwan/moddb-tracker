@@ -108,13 +108,14 @@ class ModsPage(QWidget):
         if storage is None:
             return
 
-        totals = storage.totals_per_mod()
+        totals_rows = storage.totals_per_mod()
+        totals = {int(t["id"]): t for t in totals_rows}
         mods = {int(m["id"]): m for m in storage.get_mods(active_only=True)}
 
         # per-mod deltas (7-day growth) from snapshots
         deltas: Dict[int, int] = {}
         updated_at: Dict[int, str] = {}
-        snaps = storage.snapshots_for_all([int(t["id"]) for t in totals])
+        snaps = storage.snapshots_for_all([int(m["id"]) for m in mods.values()])
         today = datetime.date.today()
         for mod_id, rows in snaps.items():
             daily_max: Dict[datetime.date, int] = {}
@@ -138,11 +139,21 @@ class ModsPage(QWidget):
 
         self.flow.clear()
         self._cards = []
-        for t in totals:
-            meta = dict(mods.get(int(t["id"]), {}))
+        for mod_id in sorted(mods):
+            meta = dict(mods[mod_id])
+            if mod_id in totals:
+                t = totals[mod_id]
+            else:
+                t = {
+                    "id": mod_id, "name": meta.get("name"), "name_id": meta.get("name_id"),
+                    "url": meta.get("url"), "downloads_total": None, "downloads_today": None,
+                    "visits": None, "visits_today": None, "rank": None, "rank_total": None,
+                    "watchers": None, "rating": None, "files": None, "comments": 0,
+                    "replies": 0, "thread_replies": 0, "favorite": meta.get("favorite", 0),
+                }
             card = ModCard()
-            card.set_data(t, meta, delta_7d=deltas.get(int(t["id"]), 0),
-                          updated=updated_at.get(int(t["id"]), ""))
+            card.set_data(t, meta, delta_7d=deltas.get(mod_id, 0),
+                          updated=updated_at.get(mod_id, ""))
             card.open_requested.connect(self.open_requested)
             card.refresh_requested.connect(self.refresh_requested)
             card.favorite_toggled.connect(self.favorite_toggled)
