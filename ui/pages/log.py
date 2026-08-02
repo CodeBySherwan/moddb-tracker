@@ -1,11 +1,5 @@
 """ui/pages/log.py"""
 
-import sys
-from pathlib import Path
-
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
 from typing import Optional
 from PyQt6.QtWidgets import QPlainTextEdit, QWidget
 from ui.theme import BORDER, GRAY, PANEL

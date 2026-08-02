@@ -3,9 +3,6 @@
 import sys
 from pathlib import Path
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
 import argparse, datetime, json, logging, traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from PyQt6.QtCore import QObject, QProcess, QSize, QThread, QTimer, QUrl, Qt, pyqtSignal

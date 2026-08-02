@@ -9,6 +9,10 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+*.egg-info/
+.pytest_cache/
+build/
+dist/
 
 # generated assets
 tray_icon.png

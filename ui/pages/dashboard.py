@@ -1,11 +1,5 @@
 """ui/pages/dashboard.py"""
 
-import sys
-from pathlib import Path
-
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
 from typing import Any, Dict, List, Optional, Tuple
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QAction
@@ -330,6 +324,8 @@ class DashboardPage(QWidget):
         plot_total.set_ylabel("Total downloads")
         if totals:
             plot_total.add_line(*zip(*totals), ACCENT, width=2, fill=True)
+            for milestone in analytics.milestones(totals):
+                plot_total.add_milestone(milestone["date"], milestone["threshold"])
 
         plot_mods.set_ylabel("Downloads")
         for i, s in enumerate(overview):
