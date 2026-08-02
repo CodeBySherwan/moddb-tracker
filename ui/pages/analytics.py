@@ -4,8 +4,8 @@ from pathlib import Path
 
 import datetime
 from typing import Any, Dict, List, Optional
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton, QScrollArea, QVBoxLayout, QWidget
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QTabWidget, QVBoxLayout, QWidget
 from pyqtgraph.exporters import ImageExporter
 import analytics
 from tracker import CONFIG_FILE, save_config
@@ -16,6 +16,7 @@ from ui.widgets import PlotCard, StatCard
 class AnalyticsPage(QWidget):
     """Interactive downloads analytics: pyqtgraph charts with zoom, hover, export."""
 
+    regen_requested = pyqtSignal()
 
     def __init__(self, config: Dict[str, Any], config_path: str = CONFIG_FILE, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -24,21 +25,14 @@ class AnalyticsPage(QWidget):
         self._storage: Optional[Storage] = None
         self._summaries: List[Dict[str, Any]] = []
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(0, 0, 8, 0)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
         title = QLabel("Analytics")
         title.setObjectName("PageTitle")
         layout.addWidget(title)
-        hint = QLabel("Interactive downloads analytics \u2014 hover a chart for values, drag to zoom.")
+        hint = QLabel("Interactive downloads analytics \u2014 hover a chart for values, drag to zoom. One chart per tab.")
         hint.setObjectName("Hint")
         layout.addWidget(hint)
 
@@ -57,6 +51,9 @@ class AnalyticsPage(QWidget):
         self.days_combo.currentIndexChanged.connect(self._days_changed)
         controls.addWidget(self.days_combo)
         controls.addStretch(1)
+        self.regen_btn = QPushButton("Regenerate charts")
+        self.regen_btn.clicked.connect(self.regen_requested.emit)
+        controls.addWidget(self.regen_btn)
         self.export_btn = QPushButton("Export charts\u2026")
         self.export_btn.clicked.connect(self._export_charts)
         controls.addWidget(self.export_btn)
@@ -81,25 +78,21 @@ class AnalyticsPage(QWidget):
         hl.addWidget(self.highlights_label)
         layout.addWidget(self.highlights)
 
-        self.grid_host = QWidget()
-        grid = QGridLayout(self.grid_host)
-        grid.setSpacing(12)
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
         self.plot_daily = PlotCard("Downloads per day", "Bars: daily gain   \u00b7   line: 7-day average")
         self.plot_cum = PlotCard("Cumulative downloads", "Total downloads over time")
         self.plot_weekly = PlotCard("Weekly downloads", "Downloads gained per ISO week")
-        grid.addWidget(self.plot_daily, 0, 0)
-        grid.addWidget(self.plot_cum, 0, 1)
-        grid.addWidget(self.plot_weekly, 1, 0, 1, 2)
-        layout.addWidget(self.grid_host, 1)
+        self.tabs.addTab(self.plot_daily, "Daily")
+        self.tabs.addTab(self.plot_cum, "Cumulative")
+        self.tabs.addTab(self.plot_weekly, "Weekly")
+        layout.addWidget(self.tabs, 1)
 
         self.placeholder = QLabel("No data yet. Run a poll to start collecting download history.")
         self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.placeholder.setObjectName("Hint")
         self.placeholder.setMinimumHeight(160)
         layout.addWidget(self.placeholder, 1)
-
-        self.scroll.setWidget(content)
-        outer.addWidget(self.scroll)
 
     def _default_days_index(self) -> int:
         days = int(self._config.get("ui", {}).get("analytics_days", 60))
@@ -140,7 +133,7 @@ class AnalyticsPage(QWidget):
     def _update(self) -> None:
         has = bool(self._summaries)
         self.placeholder.setVisible(not has)
-        self.grid_host.setVisible(has)
+        self.tabs.setVisible(has)
         self.highlights.setVisible(has)
         for card in (self.plot_daily, self.plot_cum, self.plot_weekly):
             card.clear_chart()
@@ -193,16 +186,17 @@ class AnalyticsPage(QWidget):
         dailies = sorted(agg_daily.items())
         self.plot_daily.set_ylabel("Downloads")
         if dailies:
-            self.plot_daily.add_bars(*zip(*dailies), ACCENT)
+            self.plot_daily.add_bars(*zip(*dailies), ACCENT, name="Daily gain")
             ma = analytics.moving_average(dailies, 7)
-            self.plot_daily.add_line(*zip(*ma), "#38BDF8", width=2)
+            if ma:
+                self.plot_daily.add_line(*zip(*ma), "#38BDF8", width=2, name="7-day average")
 
         # cumulative per mod, aligned to the same window
         for i, s in enumerate(self._summaries):
             series = [p for p in s["series"] if p[0] >= start]
             totals = analytics.daily_totals_range(series, days)
             color = LINE_COLORS[i % len(LINE_COLORS)]
-            self.plot_cum.add_line(*zip(*totals), color, width=2)
+            self.plot_cum.add_line(*zip(*totals), color, width=2, name=s["name"])
         self.plot_cum.set_ylabel("Total downloads")
 
         # weekly totals across mods
@@ -213,7 +207,7 @@ class AnalyticsPage(QWidget):
         wk = sorted(weeks.items())
         self.plot_weekly.set_ylabel("Downloads")
         if wk:
-            self.plot_weekly.add_bars(*zip(*wk), SUCCESS)
+            self.plot_weekly.add_bars(*zip(*wk), SUCCESS, name="Weekly gain")
 
     def _update_mod(self, mod_id: int) -> None:
         s = next((x for x in self._summaries if x["mod_id"] == mod_id), None)
@@ -234,18 +228,20 @@ class AnalyticsPage(QWidget):
 
         self.plot_daily.set_ylabel("Downloads")
         if s["deltas"]:
-            self.plot_daily.add_bars(*zip(*s["deltas"]), ACCENT)
-            self.plot_daily.add_line(*zip(*s["ma7"]), "#38BDF8", width=2)
+            self.plot_daily.add_bars(*zip(*s["deltas"]), ACCENT, name="Daily gain")
+            if s["ma7"]:
+                self.plot_daily.add_line(*zip(*s["ma7"]), "#38BDF8", width=2, name="7-day average")
 
         totals = analytics.daily_totals_range(s["series"], s["days"])
         self.plot_cum.set_ylabel("Total downloads")
-        self.plot_cum.add_line(*zip(*totals), ACCENT, width=2, fill=True)
-        for m in s["milestones"]:
-            self.plot_cum.add_milestone(m["date"], m["threshold"])
+        if totals:
+            self.plot_cum.add_line(*zip(*totals), ACCENT, width=2, fill=True, name=s["name"])
+            for m in s["milestones"]:
+                self.plot_cum.add_milestone(m["date"], m["threshold"])
 
         self.plot_weekly.set_ylabel("Downloads")
         if s["weeks"]:
-            self.plot_weekly.add_bars(*zip(*s["weeks"]), SUCCESS)
+            self.plot_weekly.add_bars(*zip(*s["weeks"]), SUCCESS, name="Weekly gain")
 
     # ---- export ---------------------------------------------------------
     def _export_charts(self) -> None:
@@ -263,4 +259,3 @@ class AnalyticsPage(QWidget):
             QMessageBox.information(self, "Charts exported", "Saved:\n" + "\n".join(written))
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "Export failed", str(exc))
-

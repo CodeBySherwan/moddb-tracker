@@ -1,7 +1,6 @@
 """Page widgets for the ModDB Tracker UI."""
 
 from ui.pages.dashboard import DashboardPage
-from ui.pages.charts import ChartsPage
 from ui.pages.mods import ModsPage
 from ui.pages.analytics import AnalyticsPage
 from ui.pages.compare import ComparePage

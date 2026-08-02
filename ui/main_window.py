@@ -35,7 +35,6 @@ VERSION = "2.1.0"
 from ui.pages import (  # noqa: E402
     AchievementsPage,
     AnalyticsPage,
-    ChartsPage,
     CommentsPage,
     ComparePage,
     DashboardPage,
@@ -193,7 +192,6 @@ class TrackerWindow(QMainWindow):
         ("Dashboard", "home"),
         ("My Mods", "package"),
         ("Analytics", "chart"),
-        ("Charts", "grid"),
         ("Compare", "scale"),
         ("Insights", "bulb"),
         ("Achievements", "trophy"),
@@ -263,7 +261,6 @@ class TrackerWindow(QMainWindow):
         self.dashboard = DashboardPage(self.config, self.config_path)
         self.mods = ModsPage(self.config, self.config_path)
         self.analytics = AnalyticsPage(self.config, self.config_path)
-        self.charts = ChartsPage(self.config, self.config_path)
         self.compare = ComparePage(self.config, self.config_path)
         self.insights = InsightsPage()
         self.achievements = AchievementsPage()
@@ -273,7 +270,7 @@ class TrackerWindow(QMainWindow):
         self.log_page = LogPage()
         self.settings = SettingsPage(self.config)
         self.search_page = SearchResultsPage()
-        for page in (self.dashboard, self.mods, self.analytics, self.charts, self.compare, self.insights, self.achievements, self.history, self.comments, self.events, self.settings, self.log_page):
+        for page in (self.dashboard, self.mods, self.analytics, self.compare, self.insights, self.achievements, self.history, self.comments, self.events, self.settings, self.log_page):
             self.stack.addWidget(page)
         self.stack.addWidget(self.search_page)
         self.search_page.open_url.connect(self._open_url)
@@ -286,7 +283,7 @@ class TrackerWindow(QMainWindow):
         self.mods.remove_requested.connect(self._remove_mod)
         self.mods.export_requested.connect(self._export_json)
         self.dashboard.view_insights.connect(self._open_insights)
-        self.charts.regen_requested.connect(self._regenerate_charts)
+        self.analytics.regen_requested.connect(self._regenerate_charts)
         self.events.open_url.connect(self._open_url)
         self.events.events_read.connect(self._update_badge)
         self.history.backfill_requested.connect(self._backfill_mod)
@@ -369,7 +366,7 @@ class TrackerWindow(QMainWindow):
         self.poll_btn.clicked.connect(self._poll_now)
         self.rescan_btn = QPushButton("Rescan")
         self.rescan_btn.clicked.connect(self._rescan)
-        self.charts_btn = QPushButton("Charts")
+        self.charts_btn = QPushButton("Regenerate charts")
         self.charts_btn.clicked.connect(self._regenerate_charts)
         self.refresh_btn = QPushButton("Refresh")
         self.refresh_btn.clicked.connect(self.refresh_all)
@@ -483,7 +480,6 @@ class TrackerWindow(QMainWindow):
         self.dashboard.refresh(self.storage)
         self.mods.refresh(self.storage)
         self.analytics.refresh(self.storage)
-        self.charts.refresh(self.storage)
         self.compare.refresh(self.storage)
         self.insights.refresh(self.storage)
         self.achievements.refresh(self.storage)
@@ -511,15 +507,30 @@ class TrackerWindow(QMainWindow):
     def _on_settings_saved(self) -> None:
         self.config = load_config(self.config_path)
         self.storage = Storage(self.config["paths"]["db"])
+        self._upsert_manual_mods()
         self.dashboard._config = self.config
         self.dashboard._load_prefs()
         self.dashboard._apply_layout()
         self.mods._config = self.config
         self.analytics._config = self.config
-        self.charts._config = self.config
         self.compare._config = self.config
         self._restart_auto_timer()
         self.refresh_all()
+
+    def _upsert_manual_mods(self) -> None:
+        """Register config['mods'] URLs immediately (offline) so they show up
+        on My Mods without waiting for a poll/rescan. Names are resolved by
+        the next poll; until then the last URL segment is used as the label."""
+        try:
+            from tracker import classify_url  # noqa: PLC0415
+            for url in self.config.get("mods", []):
+                url = (url or "").strip()
+                if not url:
+                    continue
+                name_id = url.rstrip("/").split("/")[-1]
+                self.storage.upsert_mod(name_id, url, name_id, classify_url(url))
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to upsert manual mods from config")
 
     def _open_url(self, url: str) -> None:
         if url:
@@ -532,7 +543,7 @@ class TrackerWindow(QMainWindow):
         self.charts_btn.setEnabled(not busy)
         self.refresh_btn.setEnabled(not busy)
         self.export_btn.setEnabled(not busy)
-        self.charts.regen_btn.setEnabled(not busy)
+        self.analytics.regen_btn.setEnabled(not busy)
         self.busy_bar.setVisible(busy)
         if busy:
             self.set_status(label or "Working...")

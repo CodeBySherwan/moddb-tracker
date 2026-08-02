@@ -24,11 +24,11 @@ def _d(start, days):
 def test_milestones_first_crossing_survives_plateau():
     base = datetime.date(2025, 1, 1)
     series = [
-        (base, 99_900),
-        (_d(base, 1), 99_950),
-        (_d(base, 2), 100_000),
-        (_d(base, 3), 100_000),
-        (_d(base, 4), 100_000),
+        (base, 90),
+        (_d(base, 1), 95),
+        (_d(base, 2), 100),
+        (_d(base, 3), 100),
+        (_d(base, 4), 100),
     ]
     got = milestones(series)
     assert got[0]["threshold"] == MILESTONES[0]
@@ -36,11 +36,11 @@ def test_milestones_first_crossing_survives_plateau():
 
 
 def test_milestones_reports_only_reached_thresholds():
-    series = [(datetime.date(2025, 1, 1), 500_000)]
+    series = [(datetime.date(2025, 1, 1), 300)]
     got = {m["threshold"]: m["date"] for m in milestones(series)}
     assert got[MILESTONES[0]] == datetime.date(2025, 1, 1)
-    assert got[MILESTONES[2]] == datetime.date(2025, 1, 1)
-    assert MILESTONES[3] not in got  # 1M not reached
+    assert got[MILESTONES[1]] == datetime.date(2025, 1, 1)
+    assert MILESTONES[2] not in got  # 500 not reached
 
 
 def test_milestones_empty_series():

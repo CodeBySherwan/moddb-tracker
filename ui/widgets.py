@@ -305,6 +305,7 @@ class PlotCard(QFrame):
         self.plot = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem()})
         self.plot.setBackground(CARD)
         self.plot.setMinimumHeight(230)
+        self.plot.addLegend(offset=(8, 8), brush=pg.mkBrush(CARD))
         pi = self.plot.getPlotItem()
         pi.showGrid(x=True, y=True, alpha=0.18)
         pi.setMouseEnabled(x=True, y=False)
@@ -333,10 +334,16 @@ class PlotCard(QFrame):
     # ---- drawing helpers ------------------------------------------------
     def clear_chart(self) -> None:
         self.plot.clear()
+        legend = self.plot.getPlotItem().legend
+        if legend is not None:
+            legend.clear()
         self._series = []
 
     def set_ylabel(self, text: str) -> None:
         self.plot.getPlotItem().setLabel("left", text)
+
+    def _legend(self) -> "Optional[Any]":
+        return self.plot.getPlotItem().legend
 
     def add_bars(self, dates, values, color: str, name: str = "", alpha: int = 255) -> None:
         ts = [_date_to_ts(d) for d in dates]
@@ -347,12 +354,18 @@ class PlotCard(QFrame):
             brush=pg.mkBrush(brush), pen=pg.mkPen(color),
         )
         self.plot.addItem(item)
+        if name and self._legend() is not None:
+            try:
+                self._legend().addItem(item, name)
+            except Exception:  # noqa: BLE001
+                pass
         self._series.append({"times": ts, "values": list(values), "labels": list(dates), "name": name})
 
     def add_line(self, dates, values, color: str, width: int = 2, fill: bool = False, name: str = "") -> None:
         ts = [_date_to_ts(d) for d in dates]
         item = self.plot.plot(
             ts, values, pen=pg.mkPen(color, width=width), antialias=True,
+            name=name or None,
         )
         if fill:
             item.setFillLevel(0)
@@ -363,12 +376,18 @@ class PlotCard(QFrame):
 
     def add_milestone(self, date: datetime.date, threshold: int) -> None:
         ts = _date_to_ts(date)
-        self.plot.addItem(pg.InfiniteLine(
+        line = pg.InfiniteLine(
             pos=ts, angle=90, pen=pg.mkPen(WARNING, width=1, style=Qt.PenStyle.DashLine),
-        ))
+        )
+        self.plot.addItem(line)
         text = pg.TextItem(f"{threshold:,}", color=WARNING, anchor=(1, 1))
         text.setPos(ts, threshold)
         self.plot.addItem(text)
+        if self._legend() is not None:
+            try:
+                self._legend().addItem(line, f"{threshold:,} milestone")
+            except Exception:  # noqa: BLE001
+                pass
 
     def _on_hover(self, pos) -> None:
         vb = self.plot.getPlotItem().getViewBox()
@@ -446,12 +465,21 @@ class BadgeCard(QFrame):
 
     ICONS = {
         "tracked": "star",
-        "milestone-100000": "flag",
-        "milestone-250000": "medal",
-        "milestone-500000": "medal",
-        "milestone-1000000": "medal",
-        "milestone-2500000": "gem",
-        "milestone-5000000": "crown",
+        "milestone-100": "flag",
+        "milestone-250": "flag",
+        "milestone-500": "medal",
+        "milestone-1000": "medal",
+        "milestone-2500": "medal",
+        "milestone-5000": "medal",
+        "milestone-10000": "gem",
+        "milestone-25000": "gem",
+        "milestone-50000": "gem",
+        "milestone-100000": "crown",
+        "milestone-250000": "crown",
+        "milestone-500000": "crown",
+        "milestone-1000000": "rocket",
+        "milestone-2500000": "rocket",
+        "milestone-5000000": "rocket",
         "milestone-10000000": "rocket",
         "best-week": "trophy",
         "steady": "trend",

@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 Date = datetime.date
 
-MILESTONES = [100_000, 250_000, 500_000, 1_000_000, 2_500_000, 5_000_000, 10_000_000]
+MILESTONES = [100, 250, 500, 1_000, 2_500, 5_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000, 2_500_000, 5_000_000, 10_000_000]
 
 
 def _to_date(fetched_at: str) -> Optional[Date]:
@@ -332,7 +332,7 @@ def achievements(storage, mod_id: int) -> Dict[str, Any]:
     if s["best_day"]:
         add("big-day", "Big day", f"Best single day: +{s['best_day']['value']:,} on {s['best_day']['label']}.", True,
             _date_of(s["best_day"]["label"]))
-    add("community", "Community", f"{comments} comments on this mod.", comments >= 25)
+    add("community", "Community", f"{comments} comments on this mod.", comments >= 10)
     add("fast-riser", "Fast riser", f"365-day growth of {s['growth_pct']}%.", s["growth_pct"] >= 50)
 
     return {"milestones": tl, "achievements": out, "summary": s}

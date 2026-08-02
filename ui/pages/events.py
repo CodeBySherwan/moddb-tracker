@@ -2,12 +2,101 @@
 
 from typing import Any, Dict, List, Optional
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QAction, QColor, QIcon
-from PyQt6.QtWidgets import QApplication, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QPushButton, QTableWidgetItem, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget
 from storage import Storage
-from ui.theme import ACCENT, GRAY, SUCCESS, TEXT, WARNING
-from ui.icons import _icon
-from ui.widgets import make_table
+from ui.theme import ACCENT, BORDER, CARD, FAINT, GRAY, SUCCESS, SURFACE, TEXT, WARNING
+from ui.icons import _icon_label
+from ui.widgets import relative_time
+
+KIND_STYLE = {
+    "download": ("download", SUCCESS),
+    "comment": ("chat", ACCENT),
+    "reply": ("reply", WARNING),
+}
+
+
+def _chip(text: str, color: str) -> QLabel:
+    lab = QLabel(text)
+    lab.setStyleSheet(
+        f"color: {color}; background-color: {color}22; font-size: 9px; font-weight: 800;"
+        f" letter-spacing: 1px; border-radius: 4px; padding: 2px 7px; border: none;"
+    )
+    return lab
+
+
+class EventCard(QFrame):
+    """One notification as a card: kind icon, mod name, message, time."""
+
+    clicked = pyqtSignal(object)
+    open_requested = pyqtSignal(str)
+
+    def __init__(self, event: Dict[str, Any], parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.url = str(event.get("url") or "")
+        self._selected = False
+        self._unseen = bool(event.get("seen") is False)
+
+        kind = str(event.get("kind") or "download")
+        icon_name, color = KIND_STYLE.get(kind, ("dot", GRAY))
+        self._color = color
+        kind_label = {"download": "DOWNLOADS", "comment": "COMMENT", "reply": "REPLY"}.get(kind, kind.upper())
+
+        border_color = ACCENT if self._unseen else BORDER
+        self.setStyleSheet(
+            f"EventCard {{ background-color: {CARD}; border: 1px solid {border_color};"
+            f" border-left: 4px solid {color}; border-radius: 10px; }}"
+            f"EventCard:hover {{ border-color: {ACCENT}; background-color: {SURFACE}; }}"
+        )
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(12)
+
+        icon = _icon_label(icon_name, color, 22)
+        lay.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
+
+        body = QVBoxLayout()
+        body.setSpacing(3)
+
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        mod = QLabel(str(event.get("mod_name") or "ModDB"))
+        weight = 700 if self._unseen else 600
+        mod.setStyleSheet(f"font-size: 13px; font-weight: {weight}; color: {TEXT}; background: transparent; border: none;")
+        head.addWidget(mod)
+        head.addWidget(_chip(kind_label, color))
+        head.addStretch(1)
+        stamp = QLabel(relative_time(event.get("created_at")))
+        stamp.setStyleSheet(f"font-size: 11px; color: {FAINT}; background: transparent; border: none;")
+        head.addWidget(stamp)
+        body.addLayout(head)
+
+        message = QLabel(" ".join((str(event.get("message") or "")).split()))
+        message.setWordWrap(True)
+        message.setStyleSheet(f"font-size: 12px; color: {GRAY}; background: transparent; border: none;")
+        body.addWidget(message)
+
+        lay.addLayout(body, 1)
+
+    def set_selected(self, selected: bool) -> None:
+        self._selected = selected
+        self.setStyleSheet(
+            f"EventCard {{ background-color: {SURFACE if selected else CARD};"
+            f" border: 1px solid {ACCENT if selected else BORDER};"
+            f" border-left: 4px solid {self._color};"
+            f" border-radius: 10px; }}"
+        )
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        super().mouseReleaseEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        super().mouseDoubleClickEvent(event)
+        if self.url:
+            self.open_requested.emit(self.url)
+
 
 class EventsPage(QWidget):
     """Notification center: unseen highlighting, kind filter, mark-as-read, open on ModDB."""
@@ -15,21 +104,24 @@ class EventsPage(QWidget):
     open_url = pyqtSignal(str)
     events_read = pyqtSignal()
 
-    KIND_LABELS = {"download": "Downloads", "comment": "Comments", "reply": "Replies"}
-    KIND_STYLE = {"download": ("download", SUCCESS), "comment": ("chat", ACCENT), "reply": ("reply", WARNING)}
+    PAGE_SIZE = 50
+    MAX_ROWS = 200
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._filter = ""
         self._kind = ""
         self._rows: List[Dict[str, Any]] = []
+        self._displayed: List[Dict[str, Any]] = []
+        self._shown = self.PAGE_SIZE
+        self._selected: Optional[EventCard] = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
         title = QLabel("Notifications")
         title.setObjectName("PageTitle")
         layout.addWidget(title)
-        hint = QLabel("Download and comment events detected by polls. Double-click a row to open it on ModDB.")
+        hint = QLabel("Download and comment events detected by polls. Double-click a card to open it on ModDB.")
         hint.setObjectName("Hint")
         layout.addWidget(hint)
 
@@ -55,22 +147,33 @@ class EventsPage(QWidget):
         toolbar.addWidget(self.mark_read_btn)
         layout.addLayout(toolbar)
 
-        self.table = make_table(["Time", "Kind", "Mod", "Message"])
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.table.customContextMenuRequested.connect(self._context_menu)
-        self.table.itemDoubleClicked.connect(lambda _: self._open_selected())
-        layout.addWidget(self.table, 1)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        self._cards = QVBoxLayout(container)
+        self._cards.setContentsMargins(2, 2, 2, 2)
+        self._cards.setSpacing(8)
+        self.load_more = QPushButton("Load more")
+        self.load_more.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.load_more.clicked.connect(self._load_more)
+        self._cards.addWidget(self.load_more)
+        self.scroll.setWidget(container)
+        layout.addWidget(self.scroll, 1)
+
         self.placeholder = QLabel("No events yet. Run a poll to start recording activity.")
         self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.placeholder.setObjectName("Hint")
         self.placeholder.setMinimumHeight(120)
         layout.addWidget(self.placeholder)
+        self._storage: Optional[Storage] = None
 
     def refresh(self, storage: Storage) -> None:
         self._storage = storage
         rows: List[Dict[str, Any]] = []
-        for e in storage.recent_events(200):
+        for e in storage.recent_events(self.MAX_ROWS):
             rows.append({
                 "id": e["id"],
                 "created_at": e["created_at"],
@@ -81,6 +184,8 @@ class EventsPage(QWidget):
                 "seen": bool(e["seen"]),
             })
         self._rows = rows
+        self._shown = self.PAGE_SIZE
+        self._selected = None
         self._apply_filter()
 
     def mark_all_seen(self) -> None:
@@ -99,31 +204,9 @@ class EventsPage(QWidget):
     def _mark_all_read(self) -> None:
         self.mark_all_seen()
 
-    def _open_selected(self) -> None:
-        row = self.table.currentRow()
-        if 0 <= row < len(self._displayed):
-            url = self._displayed[row].get("url")
-            if url:
-                self.open_url.emit(url)
-
-    def _context_menu(self, pos) -> None:
-        row = self.table.rowAt(pos.y())
-        if row < 0 or row >= len(self._displayed):
-            return
-        entry = self._displayed[row]
-        menu = QMenu(self)
-        if entry.get("url"):
-            open_act = QAction("Open on ModDB", self)
-            open_act.triggered.connect(lambda: self.open_url.emit(entry["url"]))
-            menu.addAction(open_act)
-            copy_act = QAction("Copy URL", self)
-            copy_act.triggered.connect(lambda: QApplication.clipboard().setText(entry["url"]))
-            menu.addAction(copy_act)
-            menu.addSeparator()
-        mark_act = QAction("Mark all read", self)
-        mark_act.triggered.connect(self._mark_all_read)
-        menu.addAction(mark_act)
-        menu.exec(self.table.viewport().mapToGlobal(pos))
+    def _load_more(self) -> None:
+        self._shown = min(self._shown + self.PAGE_SIZE, self.MAX_ROWS)
+        self._render()
 
     def _apply_filter(self) -> None:
         needle = self.search.text().strip().lower()
@@ -136,27 +219,30 @@ class EventsPage(QWidget):
                 continue
             out.append(r)
         self._displayed = out
+        self._selected = None
+        self._render()
 
-        self.table.setSortingEnabled(False)
-        self.table.setRowCount(len(out))
-        for r, entry in enumerate(out):
-            icon_name, color = self.KIND_STYLE.get(entry["kind"], ("dot", GRAY))
-            kind_label = self.KIND_LABELS.get(entry["kind"], entry["kind"].title())
-            cells = [entry["created_at"], kind_label, entry["mod_name"], entry["message"]]
-            for c, value in enumerate(cells):
-                item = QTableWidgetItem(str(value))
-                if c == 1:
-                    item.setIcon(QIcon(_icon(icon_name, color, 16)))
-                if not entry["seen"]:
-                    font = item.font()
-                    font.setBold(True)
-                    item.setFont(font)
-                    item.setForeground(QColor(TEXT))
-                if c == 0:
-                    item.setData(Qt.ItemDataRole.UserRole, entry["created_at"])
-                self.table.setItem(r, c, item)
-        self.table.resizeColumnsToContents()
+    def _render(self) -> None:
+        while self._cards.count() > 1:
+            item = self._cards.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        for r in self._displayed[: self._shown]:
+            card = EventCard(r)
+            card.clicked.connect(self._on_card_clicked)
+            card.open_requested.connect(self.open_url)
+            self._cards.insertWidget(self._cards.count() - 1, card)
+        remaining = len(self._displayed) - self._shown
+        self.load_more.setVisible(remaining > 0)
+        if remaining > 0:
+            self.load_more.setText(f"Load more ({remaining} more)")
 
-        self.placeholder.setVisible(not self._rows)
-        self.table.setVisible(bool(self._rows))
+        has_rows = bool(self._rows)
+        self.placeholder.setVisible(not has_rows)
+        self.scroll.setVisible(has_rows)
 
+    def _on_card_clicked(self, card: EventCard) -> None:
+        if self._selected is not None and self._selected is not card:
+            self._selected.set_selected(False)
+        self._selected = card
+        card.set_selected(True)
