@@ -13,9 +13,21 @@ import tracker
 from tracker import CONFIG_FILE, DEFAULT_CONFIG, discover_mods, load_config, run_init, run_poll, save_config
 from storage import Storage
 import transport
-from ui.theme import ACCENT, ERROR, GRAY, QSS
-from ui.icons import _icon
-from ui.widgets import relative_time
+from ui.theme import set_theme
+
+
+def _cli_config_path() -> str:
+    for i, arg in enumerate(sys.argv):
+        if arg == "--config" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    return CONFIG_FILE
+
+
+set_theme(str(load_config(_cli_config_path()).get("ui", {}).get("theme", "dark")))
+
+from ui.theme import ACCENT, ERROR, GRAY, QSS, build_qss, current_theme  # noqa: E402
+from ui.icons import _icon  # noqa: E402
+from ui.widgets import relative_time  # noqa: E402
 
 logger = logging.getLogger("tracker.gui")
 VERSION = "2.1.0"
@@ -913,10 +925,11 @@ def main() -> int:
     args = parser.parse_args()
 
     app = QApplication(sys.argv)
-    app.setStyleSheet(QSS)
+    config = load_config(args.config)
+    set_theme(str(config.get("ui", {}).get("theme", "dark")))
+    app.setStyleSheet(build_qss(current_theme()))
     transport.patch_moddb()
 
-    config = load_config(args.config)
     first_run = not is_profile_configured(config)
     account_set = False
     if first_run:

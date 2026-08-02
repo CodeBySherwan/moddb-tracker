@@ -5,7 +5,7 @@ from pathlib import Path
 import json, shutil
 from typing import Any, Dict, List, Optional
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget
 import pyqtgraph as pg
 import tracker
 from tracker import CONFIG_FILE, load_config, save_config
@@ -109,9 +109,9 @@ class SettingsPage(QWidget):
         layout.addWidget(section_label("System tray"))
         box5 = panel(content)
         tl = QVBoxLayout(box5)
-        self.close_to_tray = QCheckBox("Minimize to tray when closing the window")
+        self.minimize_to_tray = QCheckBox("Minimize to tray when you minimize the window")
         self.start_minimized = QCheckBox("Start hidden in the tray (background mode)")
-        tl.addWidget(self.close_to_tray)
+        tl.addWidget(self.minimize_to_tray)
         tl.addWidget(self.start_minimized)
         th = QLabel("The app keeps polling and showing toasts while it sits in the tray.")
         th.setObjectName("Hint")
@@ -127,6 +127,21 @@ class SettingsPage(QWidget):
         wl.addWidget(self.fullscreen)
         wl.addWidget(self.poll_on_open)
         layout.addWidget(box6)
+
+        # ---- appearance
+        layout.addWidget(section_label("Appearance"))
+        box6b = panel(content)
+        ap = QGridLayout(box6b)
+        ap.setHorizontalSpacing(12)
+        ap.addWidget(QLabel("Theme:"), 0, 0)
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("Dark", "dark")
+        self.theme_combo.addItem("Light", "light")
+        ap.addWidget(self.theme_combo, 0, 1)
+        ah = QLabel("Restart the app to apply the selected theme.")
+        ah.setObjectName("Hint")
+        ap.addWidget(ah, 1, 0, 1, 2)
+        layout.addWidget(box6b)
 
         # ---- paths
         layout.addWidget(section_label("Paths"))
@@ -265,10 +280,12 @@ class SettingsPage(QWidget):
         self.notify_replies.setChecked(bool(self._config["poll"].get("notify_on_replies", True)))
         self.max_toasts.setValue(int(self._config["notifications"].get("max_toasts", 5)))
         self.app_id.setText(self._config["notifications"].get("app_id", "ModDB Tracker"))
-        self.close_to_tray.setChecked(bool(self._config.get("tray", {}).get("close_to_tray", True)))
+        self.minimize_to_tray.setChecked(bool(self._config.get("tray", {}).get("minimize_to_tray", True)))
         self.start_minimized.setChecked(bool(self._config.get("tray", {}).get("start_minimized", False)))
         self.fullscreen.setChecked(bool(self._config.get("ui", {}).get("fullscreen", True)))
         self.poll_on_open.setChecked(bool(self._config.get("ui", {}).get("poll_on_open", True)))
+        idx = self.theme_combo.findData(str(self._config.get("ui", {}).get("theme", "dark")))
+        self.theme_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self.path_db.setText(self._config["paths"].get("db", "tracker.db"))
         self.path_output.setText(self._config["paths"].get("output", "output"))
         self.path_logs.setText(self._config["paths"].get("logs", "logs"))
@@ -287,10 +304,11 @@ class SettingsPage(QWidget):
         cfg["poll"]["notify_on_replies"] = self.notify_replies.isChecked()
         cfg["notifications"]["max_toasts"] = self.max_toasts.value()
         cfg["notifications"]["app_id"] = self.app_id.text().strip() or "ModDB Tracker"
-        cfg["tray"]["close_to_tray"] = self.close_to_tray.isChecked()
+        cfg["tray"]["minimize_to_tray"] = self.minimize_to_tray.isChecked()
         cfg["tray"]["start_minimized"] = self.start_minimized.isChecked()
         cfg["ui"]["fullscreen"] = self.fullscreen.isChecked()
         cfg["ui"]["poll_on_open"] = self.poll_on_open.isChecked()
+        cfg["ui"]["theme"] = self.theme_combo.currentData() or "dark"
         cfg["paths"]["db"] = self.path_db.text().strip() or "tracker.db"
         cfg["paths"]["output"] = self.path_output.text().strip() or "output"
         cfg["paths"]["logs"] = self.path_logs.text().strip() or "logs"

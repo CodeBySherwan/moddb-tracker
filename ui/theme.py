@@ -1,28 +1,98 @@
-"""Theme: dark palette constants + global stylesheet."""
+"""Theme: palette dicts, dynamic accessors, and the global stylesheet builder.
+
+Colors are looked up through the module-level ``__getattr__`` (PEP 562) so that
+``from ui.theme import ACCENT`` resolves to the *active* theme's value at import
+time. The theme is chosen once at startup (see ``ui.main_window``) and only
+applies after a restart, so every import in the process binds one coherent
+palette.
+"""
+
+from typing import Any, Dict
 
 
 # --------------------------------------------------------------------------
-# palette (dark blue theme)
+# palettes
 # --------------------------------------------------------------------------
-BG = "#0F172A"
-CARD = "#1E293B"
-PANEL = "#1E293B"
-PANEL2 = "#243247"
-SURFACE = "#273449"
-BORDER = "#334155"
-TEXT = "#E2E8F0"
-GRAY = "#94A3B8"
-FAINT = "#64748B"
-ACCENT = "#3B82F6"
-ACCENT_DARK = "#2563EB"
-SUCCESS = "#22C55E"
-WARNING = "#F59E0B"
-ERROR = "#EF4444"
+DARK: Dict[str, str] = {
+    "BG": "#0F172A",
+    "CARD": "#1E293B",
+    "PANEL": "#1E293B",
+    "PANEL2": "#243247",
+    "SURFACE": "#273449",
+    "BORDER": "#334155",
+    "TEXT": "#E2E8F0",
+    "GRAY": "#94A3B8",
+    "FAINT": "#64748B",
+    "ACCENT": "#3B82F6",
+    "ACCENT_DARK": "#2563EB",
+    "SUCCESS": "#22C55E",
+    "WARNING": "#F59E0B",
+    "ERROR": "#EF4444",
+    "line_colors": ["#3B82F6", "#22C55E", "#F59E0B", "#A78BFA", "#38BDF8", "#F472B6", "#FB923C", "#34D399"],
+}
 
-# shared chart line palette (was AnalyticsPage.LINE_COLORS)
-LINE_COLORS = [ACCENT, SUCCESS, WARNING, "#A78BFA", "#38BDF8", "#F472B6", "#FB923C", "#34D399"]
+LIGHT: Dict[str, str] = {
+    "BG": "#F1F5F9",
+    "CARD": "#FFFFFF",
+    "PANEL": "#FFFFFF",
+    "PANEL2": "#E2E8F0",
+    "SURFACE": "#F8FAFC",
+    "BORDER": "#CBD5E1",
+    "TEXT": "#0F172A",
+    "GRAY": "#64748B",
+    "FAINT": "#94A3B8",
+    "ACCENT": "#2563EB",
+    "ACCENT_DARK": "#1D4ED8",
+    "SUCCESS": "#16A34A",
+    "WARNING": "#D97706",
+    "ERROR": "#DC2626",
+    "line_colors": ["#2563EB", "#16A34A", "#D97706", "#7C3AED", "#0284C7", "#DB2777", "#EA580C", "#0D9488"],
+}
 
-QSS = f"""
+THEMES: Dict[str, Dict[str, str]] = {"dark": DARK, "light": LIGHT}
+
+_ACTIVE_NAME = "dark"
+
+
+# --------------------------------------------------------------------------
+# theme selection
+# --------------------------------------------------------------------------
+def set_theme(name: str) -> None:
+    """Select the active palette by name (must happen before UI imports)."""
+    global _ACTIVE_NAME
+    if name not in THEMES:
+        name = "dark"
+    _ACTIVE_NAME = name
+
+
+def current_theme_name() -> str:
+    return _ACTIVE_NAME
+
+
+def current_theme() -> Dict[str, str]:
+    return THEMES[_ACTIVE_NAME]
+
+
+# --------------------------------------------------------------------------
+# stylesheet
+# --------------------------------------------------------------------------
+def build_qss(palette: Dict[str, str]) -> str:
+    BG = palette["BG"]
+    CARD = palette["CARD"]
+    PANEL = palette["PANEL"]
+    PANEL2 = palette["PANEL2"]
+    SURFACE = palette["SURFACE"]
+    BORDER = palette["BORDER"]
+    TEXT = palette["TEXT"]
+    GRAY = palette["GRAY"]
+    FAINT = palette["FAINT"]
+    ACCENT = palette["ACCENT"]
+    ACCENT_DARK = palette["ACCENT_DARK"]
+    SUCCESS = palette["SUCCESS"]
+    WARNING = palette["WARNING"]
+    ERROR = palette["ERROR"]
+
+    return f"""
 * {{
     outline: none;
 }}
@@ -293,3 +363,17 @@ QStatusBar {{
 }}
 QStatusBar::item {{ border: none; }}
 """
+
+
+# --------------------------------------------------------------------------
+# dynamic constant access: `from ui.theme import ACCENT` (and friends) resolves
+# against the active palette.
+# --------------------------------------------------------------------------
+def __getattr__(name: str) -> Any:
+    if name == "QSS":
+        return build_qss(current_theme())
+    if name == "LINE_COLORS":
+        return list(current_theme().get("line_colors", DARK["line_colors"]))
+    if name in current_theme():
+        return current_theme()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

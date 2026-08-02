@@ -17,6 +17,11 @@
     "minimize_to_tray": true,
     "start_minimized": false
   },
+  "ui": {
+    "fullscreen": true,
+    "poll_on_open": true,
+    "theme": "dark"
+  },
   "paths": {
     "db": "tracker.db",
     "output": "output",

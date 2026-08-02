@@ -64,6 +64,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "ui": {
         "fullscreen": True,
         "poll_on_open": True,
+        "theme": "dark",
         "mods_sort": 0,
         "mods_filter": "",
         "analytics_days": 60,
