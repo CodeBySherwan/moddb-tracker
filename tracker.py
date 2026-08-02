@@ -475,10 +475,15 @@ def member_names(storage: Storage) -> List[str]:
 def classify_comment(comment: Dict[str, Any], member_names: List[str]) -> str:
     if comment["parent_author"] and comment["parent_author"].lower() in member_names:
         return "reply"
-    content = (comment["content"] or "").lower()
-    for name in member_names:
-        if name and name in content:
-            return "reply"
+    # Demoted fallback: only trust a username mention when the structural
+    # signal is unavailable (parent comment author unknown/blank), so a
+    # top-level comment like "thanks <name>, great mod!" isn't miscounted
+    # as a reply.
+    if not comment["parent_author"]:
+        content = (comment["content"] or "").lower()
+        for name in member_names:
+            if name and name in content:
+                return "reply"
     return "comment"
 
 
@@ -602,8 +607,11 @@ def run_poll(storage: Storage, config: Dict[str, Any], notify: bool = True) -> i
         all_events.extend(events)
 
     if notify:
-        import notify as notif
-        notif.notify_events(all_events, config)
+        try:
+            import notify as notif
+            notif.notify_events(all_events, config)
+        except Exception as exc:  # noqa: BLE001 - toasts are optional; never crash a poll
+            logger.warning("Toast notifications unavailable (%s): %s", type(exc).__name__, exc)
         if config["poll"]["charts_each_poll"]:
             try:
                 import charts
