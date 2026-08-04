@@ -1,11 +1,12 @@
 """ui/pages/history.py"""
 
+import datetime
 from typing import Any, List, Optional
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QSplitter, QTabWidget, QVBoxLayout, QWidget
 import analytics
 from storage import Storage
-from ui.theme import ACCENT, SUCCESS
+from ui.theme import ACCENT, SUCCESS, WARNING
 from ui.widgets import PlotCard, fill_table, make_table
 
 class HistoryPage(QWidget):
@@ -80,10 +81,21 @@ class HistoryPage(QWidget):
         snap_tab = QWidget()
         v2 = QVBoxLayout(snap_tab)
         v2.setContentsMargins(0, 0, 0, 0)
+        v2.setSpacing(10)
+        splitter2 = QSplitter()
+        splitter2.setOrientation(Qt.Orientation.Vertical)
+        self.plot_rank = PlotCard("Rank over time", "Lower rank number = higher rank (inverted axis)")
+        self.plot_rank.set_ylabel("rank")
+        self.plot_rank.plot.getPlotItem().getViewBox().invertY(True)
+        splitter2.addWidget(self.plot_rank)
         self.table = make_table(
             ["Fetched", "Downloads", "Today", "Delta", "Visits", "Visits today", "Rank", "Watchers"]
         )
-        v2.addWidget(self.table, 1)
+        splitter2.addWidget(self.table)
+        splitter2.setStretchFactor(0, 3)
+        splitter2.setStretchFactor(1, 2)
+        splitter2.setSizes([240, 260])
+        v2.addWidget(splitter2, 1)
         self.tabs.addTab(snap_tab, "Poll snapshots")
 
         layout.addWidget(self.tabs, 1)
@@ -163,10 +175,12 @@ class HistoryPage(QWidget):
             )
 
     def _populate_snapshots(self, mod_id: Optional[int]) -> None:
+        self.plot_rank.clear_chart()
         if mod_id is None:
             fill_table(self.table, [])
             return
         rows: List[List[Any]] = []
+        rank_points: List[Any] = []
         prev_total = None
         for s in self._storage.snapshots_for(mod_id):
             total = s["downloads_total"]
@@ -175,6 +189,12 @@ class HistoryPage(QWidget):
                 delta = max(0, int(total) - int(prev_total))
             prev_total = total
             rank = f"{s['rank'] or '-'}/{s['rank_total'] or '-'}" if s["rank"] is not None else "-"
+            if s["rank"] is not None:
+                try:
+                    day = datetime.date.fromisoformat(str(s["fetched_at"])[:10])
+                    rank_points.append((day, int(s["rank"])))
+                except Exception:  # noqa: BLE001
+                    pass
             rows.append([
                 s["fetched_at"],
                 s["downloads_total"],
@@ -186,4 +206,9 @@ class HistoryPage(QWidget):
                 s["watchers"] or 0,
             ])
         fill_table(self.table, rows)
+        if rank_points:
+            self.plot_rank.add_line(
+                [d for d, _ in rank_points], [v for _, v in rank_points],
+                WARNING, width=2, name="Rank",
+            )
 

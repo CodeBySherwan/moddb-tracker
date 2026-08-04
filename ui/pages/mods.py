@@ -169,6 +169,24 @@ class ModsPage(QWidget):
         has_any = bool(self._cards) or bool(storage.get_mods(active_only=True))
         self.scroll.setVisible(has_any)
         self.placeholder.setVisible(not has_any)
+        if not has_any:
+            auto = bool(self._config.get("auto_discover"))
+            never_polled = not storage.meta_get("last_poll")
+            if auto and never_polled:
+                self.placeholder.setText(
+                    "Nothing tracked yet.\n\nAuto-discovery is on. Click \u201cPoll now\u201d or wait for "
+                    "the next scheduled poll to find your mods automatically."
+                )
+            elif auto:
+                self.placeholder.setText(
+                    "Nothing tracked yet.\n\nAuto-discovery is on but hasn\u2019t found anything yet \u2014 "
+                    "check your profile_url in Configuration, or add mods under Manual mods."
+                )
+            else:
+                self.placeholder.setText(
+                    "Nothing tracked yet.\n\nAdd mods in Configuration \u2192 Manual mods, or click "
+                    "\u201cRescan profile\u201d to auto-discover your content."
+                )
 
     def _apply_sort(self) -> None:
         if self._sort == 0:
@@ -178,7 +196,7 @@ class ModsPage(QWidget):
         elif self._sort == 2:
             key = _card_growth
         elif self._sort == 3:
-            key = lambda c: c._name.text().lower()
+            key = lambda c: c._full_name.lower()
         else:
             key = lambda c: (not c._favorite, _card_downloads(c))
         self._cards.sort(key=key, reverse=(self._sort in (0, 1, 2, 4)))
@@ -205,29 +223,13 @@ class ModsPage(QWidget):
 
 
 def _card_downloads(card: ModCard) -> int:
-    try:
-        return int((card._dl.text() or "0").replace(",", ""))
-    except Exception:  # noqa: BLE001
-        return 0
-
+    return card.downloads_total
 
 
 def _card_today(card: ModCard) -> int:
-    try:
-        text = card._dl_cap.text()
-        plus = text.split("+")[-1].split(" TODAY")[0].replace(",", "")
-        return int(plus or 0)
-    except Exception:  # noqa: BLE001
-        return 0
-
+    return card.downloads_today
 
 
 def _card_growth(card: ModCard) -> int:
-    text = card._growth.text()
-    try:
-        if "▲" in text:
-            return int(text.split("+")[-1].replace(",", "").split()[0])
-    except Exception:  # noqa: BLE001
-        pass
-    return -1 if "— no change" in text else 0
+    return card.growth_7d
 

@@ -478,3 +478,15 @@ def dashboard_comment_activity(storage, days: int = 30) -> List[Tuple[Date, int]
             continue
         out.append((day, int(row["n"] or 0)))
     return out
+
+
+def comment_activity_split(storage, mod_ids: Optional[List[int]] = None, days: int = 60) -> List[Tuple[Date, int, int]]:
+    """(day, comments, replies) per day — replies excluded from the comment count."""
+    out: List[Tuple[Date, int, int]] = []
+    for r in storage.comment_replies_per_day(mod_ids, days):
+        try:
+            day = Date.fromisoformat(r["day"])
+        except Exception:  # noqa: BLE001
+            continue
+        out.append((day, int(r["comments"] or 0), int(r["replies"] or 0)))
+    return out

@@ -81,11 +81,13 @@ class AnalyticsPage(QWidget):
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self.plot_daily = PlotCard("Downloads per day", "Bars: daily gain   \u00b7   line: 7-day average")
-        self.plot_cum = PlotCard("Cumulative downloads", "Total downloads over time")
+        self.plot_cum = PlotCard("Cumulative downloads", "Total downloads over time (dashed: projection)")
         self.plot_weekly = PlotCard("Weekly downloads", "Downloads gained per ISO week")
+        self.plot_comments = PlotCard("Comments activity", "Stacked bars: comments   \u00b7   replies")
         self.tabs.addTab(self.plot_daily, "Daily")
         self.tabs.addTab(self.plot_cum, "Cumulative")
         self.tabs.addTab(self.plot_weekly, "Weekly")
+        self.tabs.addTab(self.plot_comments, "Comments")
         layout.addWidget(self.tabs, 1)
 
         self.placeholder = QLabel("No data yet. Run a poll to start collecting download history.")
@@ -135,7 +137,7 @@ class AnalyticsPage(QWidget):
         self.placeholder.setVisible(not has)
         self.tabs.setVisible(has)
         self.highlights.setVisible(has)
-        for card in (self.plot_daily, self.plot_cum, self.plot_weekly):
+        for card in (self.plot_daily, self.plot_cum, self.plot_weekly, self.plot_comments):
             card.clear_chart()
         if not has:
             for s in (self.stat_total, self.stat_7d, self.stat_30d, self.stat_next):
@@ -197,6 +199,12 @@ class AnalyticsPage(QWidget):
             totals = analytics.daily_totals_range(series, days)
             color = LINE_COLORS[i % len(LINE_COLORS)]
             self.plot_cum.add_line(*zip(*totals), color, width=2, name=s["name"])
+        if agg["next_week"]:
+            self.plot_cum.add_line(
+                [today, today + datetime.timedelta(days=7)],
+                [agg["total"], agg["total"] + agg["next_week"]],
+                GRAY, width=2, dash=True, name=f"Projection (+{agg['next_week']:,})",
+            )
         self.plot_cum.set_ylabel("Total downloads")
 
         # weekly totals across mods
@@ -208,6 +216,8 @@ class AnalyticsPage(QWidget):
         self.plot_weekly.set_ylabel("Downloads")
         if wk:
             self.plot_weekly.add_bars(*zip(*wk), SUCCESS, name="Weekly gain")
+
+        self._draw_comments(None)
 
     def _update_mod(self, mod_id: int) -> None:
         s = next((x for x in self._summaries if x["mod_id"] == mod_id), None)
@@ -231,6 +241,10 @@ class AnalyticsPage(QWidget):
             self.plot_daily.add_bars(*zip(*s["deltas"]), ACCENT, name="Daily gain")
             if s["ma7"]:
                 self.plot_daily.add_line(*zip(*s["ma7"]), "#38BDF8", width=2, name="7-day average")
+            if s["milestones"]:
+                dmax = max(v for _, v in s["deltas"])
+                for m in s["milestones"]:
+                    self.plot_daily.add_milestone_marker(m["date"], f"{m['threshold']:,}", dmax)
 
         totals = analytics.daily_totals_range(s["series"], s["days"])
         self.plot_cum.set_ylabel("Total downloads")
@@ -238,10 +252,36 @@ class AnalyticsPage(QWidget):
             self.plot_cum.add_line(*zip(*totals), ACCENT, width=2, fill=True, name=s["name"])
             for m in s["milestones"]:
                 self.plot_cum.add_milestone(m["date"], m["threshold"])
+            est = s["next_week_estimate"]
+            if est is not None:
+                last_day, last_val = totals[-1]
+                self.plot_cum.add_line(
+                    [last_day, last_day + datetime.timedelta(days=7)],
+                    [last_val, last_val + est],
+                    ACCENT, width=2, dash=True, name=f"Projection (+{est:,})",
+                )
 
         self.plot_weekly.set_ylabel("Downloads")
         if s["weeks"]:
             self.plot_weekly.add_bars(*zip(*s["weeks"]), SUCCESS, name="Weekly gain")
+            if s["milestones"]:
+                wmax = max(v for _, v in s["weeks"])
+                for m in s["milestones"]:
+                    self.plot_weekly.add_milestone_marker(m["date"], f"{m['threshold']:,}", wmax)
+
+        self._draw_comments(mod_id)
+
+    def _draw_comments(self, mod_id: Optional[int]) -> None:
+        days = int(self.days_combo.currentData() or 60)
+        rows = analytics.comment_activity_split(self._storage, [mod_id] if mod_id else None, days)
+        self.plot_comments.set_ylabel("Count")
+        if not rows:
+            return
+        dates = [d for d, _, _ in rows]
+        comments = [c for _, c, _ in rows]
+        replies = [r for _, _, r in rows]
+        self.plot_comments.add_bars(dates, comments, ACCENT, name="Comments")
+        self.plot_comments.add_bars(dates, replies, WARNING, name="Replies", base=comments)
 
     # ---- export ---------------------------------------------------------
     def _export_charts(self) -> None:
@@ -250,7 +290,8 @@ class AnalyticsPage(QWidget):
             return
         try:
             written = []
-            for slug, card in (("daily", self.plot_daily), ("cumulative", self.plot_cum), ("weekly", self.plot_weekly)):
+            for slug, card in (("daily", self.plot_daily), ("cumulative", self.plot_cum),
+                               ("weekly", self.plot_weekly), ("comments", self.plot_comments)):
                 path = Path(dir_path) / f"analytics_{slug}.png"
                 exporter = ImageExporter(card.plot.getPlotItem())
                 exporter.parameters()["width"] = 1200

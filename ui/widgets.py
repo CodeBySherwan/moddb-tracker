@@ -4,18 +4,24 @@ from __future__ import annotations
 
 import datetime
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pyqtgraph as pg
-from PyQt6.QtCore import QRect, QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QIcon
+from PyQt6.QtCore import QRect, QSize, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import QColor, QDesktopServices, QFont, QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QDialog,
+    QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLayout,
     QLayoutItem,
+    QMenu,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -329,6 +335,8 @@ class PlotCard(QFrame):
         lay.addWidget(self.plot, 1)
         lay.addWidget(self.info)
 
+        self.plot.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.plot.customContextMenuRequested.connect(self._export_context)
         self.plot.scene().sigMouseMoved.connect(self._on_hover)
 
     # ---- drawing helpers ------------------------------------------------
@@ -345,12 +353,12 @@ class PlotCard(QFrame):
     def _legend(self) -> "Optional[Any]":
         return self.plot.getPlotItem().legend
 
-    def add_bars(self, dates, values, color: str, name: str = "", alpha: int = 255) -> None:
+    def add_bars(self, dates, values, color: str, name: str = "", alpha: int = 255, base: Optional[List[int]] = None) -> None:
         ts = [_date_to_ts(d) for d in dates]
         brush = QColor(color)
         brush.setAlpha(alpha)
         item = _PlainBar(
-            x=ts, height=values, width=86400 * 0.68,
+            x=ts, height=values, base=base or 0, width=86400 * 0.68,
             brush=pg.mkBrush(brush), pen=pg.mkPen(color),
         )
         self.plot.addItem(item)
@@ -361,10 +369,13 @@ class PlotCard(QFrame):
                 pass
         self._series.append({"times": ts, "values": list(values), "labels": list(dates), "name": name})
 
-    def add_line(self, dates, values, color: str, width: int = 2, fill: bool = False, name: str = "") -> None:
+    def add_line(self, dates, values, color: str, width: int = 2, fill: bool = False, name: str = "", dash: bool = False) -> None:
         ts = [_date_to_ts(d) for d in dates]
+        pen = pg.mkPen(color, width=width)
+        if dash:
+            pen.setStyle(Qt.PenStyle.DashLine)
         item = self.plot.plot(
-            ts, values, pen=pg.mkPen(color, width=width), antialias=True,
+            ts, values, pen=pen, antialias=True,
             name=name or None,
         )
         if fill:
@@ -388,6 +399,39 @@ class PlotCard(QFrame):
                 self._legend().addItem(line, f"{threshold:,} milestone")
             except Exception:  # noqa: BLE001
                 pass
+
+    def add_milestone_marker(self, date: datetime.date, label: str, ymax: float) -> None:
+        """Vertical dashed marker at a milestone date (used on Daily/Weekly)."""
+        ts = _date_to_ts(date)
+        line = pg.InfiniteLine(
+            pos=ts, angle=90, pen=pg.mkPen(WARNING, width=1, style=Qt.PenStyle.DashLine),
+        )
+        self.plot.addItem(line)
+        text = pg.TextItem(label, color=WARNING, anchor=(1, 1))
+        text.setPos(ts, ymax if ymax > 0 else 1)
+        self.plot.addItem(text)
+
+    # ---- export ---------------------------------------------------------
+    def _export_context(self, pos) -> None:
+        menu = QMenu(self)
+        action = menu.addAction("Export chart as PNG\u2026")
+        chosen = menu.exec(self.plot.mapToGlobal(pos))
+        if chosen == action:
+            self._export_png()
+
+    def _export_png(self) -> None:
+        from pyqtgraph.exporters import ImageExporter  # noqa: PLC0415
+        dir_path = QFileDialog.getExistingDirectory(self, "Choose a folder for chart PNGs")
+        if not dir_path:
+            return
+        try:
+            path = Path(dir_path) / "chart.png"
+            exporter = ImageExporter(self.plot.getPlotItem())
+            exporter.parameters()["width"] = 1200
+            exporter.export(str(path))
+            QMessageBox.information(self, "Chart exported", f"Saved: {path}")
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Export failed", str(exc))
 
     def _on_hover(self, pos) -> None:
         vb = self.plot.getPlotItem().getViewBox()
@@ -606,6 +650,110 @@ class ActivityFeed(QFrame):
             self._list_lay.insertWidget(self._list_lay.count() - 1, row)
 
 
+class ModDetailDialog(QDialog):
+    """Modal dialog displaying comprehensive details and description for a mod."""
+
+    def __init__(self, totals: Dict[str, Any], meta: Dict[str, Any], delta_7d: int = 0, updated: str = "", parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        name = str(totals.get("name") or meta.get("name") or "Mod")
+        self.setWindowTitle(f"Mod Details — {name}")
+        self.setMinimumWidth(560)
+
+        url = str(totals.get("url") or meta.get("url") or "")
+        content_type = str(meta.get("content_type") or totals.get("content_type") or "mod")
+        desc = meta.get("description") or totals.get("description") or "No detailed description available yet. Run a poll or rescan to fetch page summary from ModDB."
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
+
+        # Header
+        head = QHBoxLayout()
+        head.setSpacing(10)
+
+        badge_text, badge_color = ModCard.TYPE_BADGE.get(content_type, ("MOD", ACCENT))
+        badge = QLabel(badge_text)
+        badge.setFixedSize(54, 22)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setStyleSheet(
+            "font-size: 10px; font-weight: 800; letter-spacing: 1px; border-radius: 4px;"
+            f" background: {badge_color}22; color: {badge_color}; border: 1px solid {badge_color}55;"
+        )
+        title = QLabel(name)
+        title.setStyleSheet("font-size: 18px; font-weight: 800;")
+        head.addWidget(badge)
+        head.addWidget(title, 1)
+        layout.addLayout(head)
+
+        # Description box
+        desc_label = QLabel("DESCRIPTION & OVERVIEW")
+        desc_label.setObjectName("SectionTitle")
+        layout.addWidget(desc_label)
+
+        desc_box = QFrame()
+        desc_box.setObjectName("Panel")
+        desc_lay = QVBoxLayout(desc_box)
+        desc_lay.setContentsMargins(14, 12, 14, 12)
+
+        desc_text = QLabel(desc)
+        desc_text.setWordWrap(True)
+        desc_text.setStyleSheet(f"font-size: 13px; color: {TEXT}; background: transparent; border: none;")
+        desc_lay.addWidget(desc_text)
+        layout.addWidget(desc_box)
+
+        # Key Metrics Grid
+        stats_label = QLabel("TRACKED STATISTICS")
+        stats_label.setObjectName("SectionTitle")
+        layout.addWidget(stats_label)
+
+        grid_frame = QFrame()
+        grid_frame.setObjectName("Panel")
+        grid = QGridLayout(grid_frame)
+        grid.setContentsMargins(14, 12, 14, 12)
+        grid.setSpacing(12)
+
+        metrics = [
+            ("Total Downloads", format_num(totals.get("downloads_total"))),
+            ("Today's Downloads", format_num(totals.get("downloads_today"))),
+            ("7-Day Growth", f"+{delta_7d:,}" if delta_7d > 0 else "0"),
+            ("Total Visits", format_num(totals.get("visits"))),
+            ("Visits Today", format_num(totals.get("visits_today"))),
+            ("Watchers", format_num(totals.get("watchers"))),
+            ("Rating", f"{totals.get('rating'):.1f} / 10" if totals.get('rating') else "N/A"),
+            ("ModDB Rank", f"#{totals.get('rank')}" if totals.get('rank') else "N/A"),
+            ("Comments", format_num(totals.get("comments"))),
+            ("Replies to You", format_num(totals.get("replies"))),
+        ]
+
+        for i, (label_text, val_text) in enumerate(metrics):
+            row, col = divmod(i, 2)
+            lbl = QLabel(label_text)
+            lbl.setStyleSheet(f"color: {GRAY}; font-size: 11px; font-weight: 600;")
+            val = QLabel(val_text)
+            val.setStyleSheet(f"color: {TEXT}; font-size: 14px; font-weight: 700;")
+            grid.addWidget(lbl, row * 2, col * 2)
+            grid.addWidget(val, row * 2 + 1, col * 2)
+
+        layout.addWidget(grid_frame)
+
+        # Footer Buttons
+        footer = QHBoxLayout()
+        footer.setSpacing(10)
+        footer.addStretch(1)
+
+        if url:
+            open_btn = QPushButton("Open on ModDB")
+            open_btn.setObjectName("Primary")
+            open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(url)))
+            footer.addWidget(open_btn)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        footer.addWidget(close_btn)
+
+        layout.addLayout(footer)
+
+
 class ModCard(QFrame):
     """Compact card for a single tracked mod on the My Mods page."""
 
@@ -614,6 +762,7 @@ class ModCard(QFrame):
     favorite_toggled = pyqtSignal(str, bool)
     remove_requested = pyqtSignal(str)
     export_requested = pyqtSignal()
+    detail_requested = pyqtSignal(dict, dict, int, str)
 
     TYPE_BADGE = {
         "mod": ("MOD", ACCENT),
@@ -625,10 +774,18 @@ class ModCard(QFrame):
         super().__init__(parent)
         self.setObjectName("ModCard")
         self.setFixedHeight(148)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._url = ""
         self._name_id = ""
         self._mod_id = 0
         self._favorite = False
+        self._totals: Dict[str, Any] = {}
+        self._meta_dict: Dict[str, Any] = {}
+        self._delta_7d = 0
+        self._updated = ""
+        self.downloads_total = 0
+        self.downloads_today = 0
+        self.growth_7d = 0
 
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_menu)
@@ -657,6 +814,13 @@ class ModCard(QFrame):
         header.setSpacing(8)
         header.addWidget(self._badge)
         header.addWidget(self._name, 1)
+        self._pending = QLabel("Not yet polled")
+        self._pending.setStyleSheet(
+            f"color: {WARNING}; background-color: {WARNING}22; font-size: 9px; font-weight: 800;"
+            " letter-spacing: 1px; border-radius: 4px; padding: 2px 7px; border: none;"
+        )
+        self._pending.setVisible(False)
+        header.addWidget(self._pending)
         header.addWidget(self._star)
         lay.addLayout(header)
 
@@ -688,6 +852,8 @@ class ModCard(QFrame):
         # footer: updated stamp + actions
         self._stamp = QLabel("")
         self._stamp.setStyleSheet(f"color: {FAINT}; font-size: 11px;")
+        self._details_btn = QPushButton("Details")
+        self._details_btn.clicked.connect(self._show_details)
         self._open_btn = QPushButton("Open")
         self._open_btn.clicked.connect(lambda: self.open_requested.emit(self._url))
         self._refresh_btn = QPushButton("Refresh")
@@ -696,14 +862,32 @@ class ModCard(QFrame):
         footer.setSpacing(8)
         footer.addWidget(self._stamp)
         footer.addStretch(1)
+        footer.addWidget(self._details_btn)
         footer.addWidget(self._open_btn)
         footer.addWidget(self._refresh_btn)
         lay.addLayout(footer)
         _apply_shadow(self)
 
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            # Don't open if clicked directly on buttons which handle their own events
+            widget = self.childAt(event.pos())
+            if not isinstance(widget, (QPushButton, QToolButton)):
+                self._show_details()
+        super().mousePressEvent(event)
+
+    def _show_details(self) -> None:
+        self.detail_requested.emit(self._totals, self._meta_dict, self._delta_7d, self._updated)
+        dialog = ModDetailDialog(self._totals, self._meta_dict, self._delta_7d, self._updated, parent=self)
+        dialog.exec()
+
     # ---- data -----------------------------------------------------------
     def set_data(self, totals: Dict[str, Any], meta: Dict[str, Any],
                  delta_7d: int = 0, updated: str = "") -> None:
+        self._totals = totals
+        self._meta_dict = meta
+        self._delta_7d = delta_7d
+        self._updated = updated
         self._mod_id = int(totals["id"])
         self._name_id = str(totals.get("name_id") or meta.get("name_id") or "")
         self._url = str(totals.get("url") or meta.get("url") or "")
@@ -723,6 +907,10 @@ class ModCard(QFrame):
         self._refresh_name_elide()
 
         raw_total = totals.get("downloads_total")
+        self.downloads_total = int(raw_total) if raw_total is not None else 0
+        self.downloads_today = int(totals.get("downloads_today") or 0)
+        self.growth_7d = delta_7d
+        self._pending.setVisible(raw_total is None)
         self._dl.setText("—" if raw_total is None else format_num(raw_total))
         self._dl_cap.setText(f"DOWNLOADS · +{format_num(totals.get('downloads_today'))} TODAY")
         if delta_7d > 0:

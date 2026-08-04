@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS mods (
     content_type TEXT NOT NULL DEFAULT 'mod',
     active INTEGER NOT NULL DEFAULT 1,
     favorite INTEGER NOT NULL DEFAULT 0,
+    description TEXT,
+    thumbnail TEXT,
     discovered_at TEXT NOT NULL
 );
 
@@ -117,6 +119,14 @@ class Storage:
             self.conn.execute(
                 "ALTER TABLE mods ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0"
             )
+        if "description" not in cols:
+            self.conn.execute(
+                "ALTER TABLE mods ADD COLUMN description TEXT"
+            )
+        if "thumbnail" not in cols:
+            self.conn.execute(
+                "ALTER TABLE mods ADD COLUMN thumbnail TEXT"
+            )
         event_cols = {r[1] for r in self.conn.execute("PRAGMA table_info(events)").fetchall()}
         if "seen" not in event_cols:
             self.conn.execute(
@@ -159,6 +169,20 @@ class Storage:
     def set_mod_favorite(self, name_id: str, favorite: bool) -> None:
         self.conn.execute("UPDATE mods SET favorite = ? WHERE name_id = ?", (1 if favorite else 0, name_id))
         self.conn.commit()
+
+    def update_mod_metadata(self, name_id: str, description: Optional[str] = None, thumbnail: Optional[str] = None) -> None:
+        updates = []
+        params = []
+        if description is not None:
+            updates.append("description = ?")
+            params.append(description)
+        if thumbnail is not None:
+            updates.append("thumbnail = ?")
+            params.append(thumbnail)
+        if updates:
+            params.append(name_id)
+            self.conn.execute(f"UPDATE mods SET {', '.join(updates)} WHERE name_id = ?", params)
+            self.conn.commit()
 
     def get_mods(self, active_only: bool = True) -> List[sqlite3.Row]:
         sql = "SELECT * FROM mods"
@@ -445,7 +469,7 @@ class Storage:
             args = ()
         rows = self.conn.execute(
             f"""
-            SELECT m.id, m.name, m.name_id, m.url, s.downloads_total, s.downloads_today,
+            SELECT m.id, m.name, m.name_id, m.url, m.description, m.thumbnail, s.downloads_total, s.downloads_today,
                    s.visits, s.visits_today, s.rank, s.rank_total, s.watchers, s.rating, s.files,
                    (SELECT COUNT(*) FROM comments c WHERE c.mod_id = m.id) AS comments,
                    {replies_sql} AS replies,
@@ -558,6 +582,27 @@ class Storage:
             GROUP BY day ORDER BY day
             """,
             (f"-{days} days",),
+        ).fetchall()
+
+    def comment_replies_per_day(self, mod_ids: Optional[List[int]] = None, days: int = 60) -> List[sqlite3.Row]:
+        """(day, comments, replies) counts per day — replies are comments with a parent."""
+        if mod_ids:
+            placeholders = ",".join("?" for _ in mod_ids)
+            where = f"mod_id IN ({placeholders}) AND posted_at >= date('now', ?)"
+            params: tuple = (*mod_ids, f"-{days} days")
+        else:
+            where = "posted_at >= date('now', ?)"
+            params = (f"-{days} days",)
+        return self.conn.execute(
+            f"""
+            SELECT date(posted_at) AS day,
+                   SUM(CASE WHEN parent_id IS NULL THEN 1 ELSE 0 END) AS comments,
+                   SUM(CASE WHEN parent_id IS NOT NULL THEN 1 ELSE 0 END) AS replies
+            FROM comments
+            WHERE {where}
+            GROUP BY day ORDER BY day
+            """,
+            params,
         ).fetchall()
 
     @staticmethod

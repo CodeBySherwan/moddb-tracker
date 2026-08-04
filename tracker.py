@@ -321,6 +321,13 @@ def fetch_mod_snapshot(url: str, content_type: str = "mod") -> Tuple[Dict[str, A
             fields["downloads_total"] = getattr(mod_obj, "downloads", 0) or 0
             fields["downloads_today"] = getattr(mod_obj, "today", 0) or 0
             fields["rating"] = None
+
+        meta_desc = html.find("meta", property="og:description") or html.find("meta", attrs={"name": "description"})
+        if meta_desc and meta_desc.get("content"):
+            fields["description"] = meta_desc["content"].strip()
+        meta_img = html.find("meta", property="og:image")
+        if meta_img and meta_img.get("content"):
+            fields["thumbnail"] = meta_img["content"].strip()
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to parse page %s: %s", url, exc)
 
@@ -502,6 +509,9 @@ def snapshot_mod(storage: Storage, mod: Dict[str, Any], config: Dict[str, Any], 
     if not fields:
         logger.error("No data retrieved for %s -- skipping", mod_name)
         return events
+
+    if "description" in fields or "thumbnail" in fields:
+        storage.update_mod_metadata(mod["name_id"], description=fields.get("description"), thumbnail=fields.get("thumbnail"))
 
     last = storage.last_snapshot(mod_id)
     storage.add_snapshot(mod_id, **fields)

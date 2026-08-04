@@ -9,7 +9,7 @@ from tracker import CONFIG_FILE, save_config
 from storage import Storage
 from ui.theme import ACCENT, GRAY, SUCCESS
 from ui.icons import INSIGHT_COLORS, INSIGHT_ICONS, _apply_shadow, _icon, _icon_label
-from ui.widgets import ActivityFeed, StatCard
+from ui.widgets import ActivityFeed, StatCard, relative_time
 
 class DashboardPage(QWidget):
     view_insights = pyqtSignal()
@@ -214,4 +214,7 @@ class DashboardPage(QWidget):
 
         member = storage.meta_get("member_name") or "not set"
         last = storage.meta_get("last_poll")
-        self.subtitle.setText(f"Member: {member}   |   Last poll: {last if last else 'never'}")
+        self.subtitle.setText(
+            f"Member: {member}   |   Last poll: {relative_time(last) if last else 'never'}"
+        )
+        self.subtitle.setToolTip(last or "No poll has run yet")

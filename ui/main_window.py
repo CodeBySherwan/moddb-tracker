@@ -208,6 +208,7 @@ class TrackerWindow(QMainWindow):
         self.config = load_config(config_path)
         transport.patch_moddb()  # ensure moddb's internal get_page is Cloudflare-proof
         self.storage = Storage(self.config["paths"]["db"])
+        self._upsert_manual_mods()
         self.worker: Optional[TrackerWorker] = None
         self._stopping = False
         self._tray_hint_shown = False
@@ -492,7 +493,7 @@ class TrackerWindow(QMainWindow):
         member = self.storage.meta_get("member_name") or ""
         last = self.storage.meta_get("last_poll") or ""
         bits = [f"Member: {member}"] if member else ["Member: not set"]
-        bits.append(f"Last poll: {last}" if last else "Never polled")
+        bits.append(f"Last poll: {relative_time(last)}" if last else "Never polled")
         self.status_label.setText("   |   ".join(bits))
         self.sync_label.setText(f"Synced {relative_time(last)}" if last else "Not synced")
         self._update_tray_tooltip(member, last)
