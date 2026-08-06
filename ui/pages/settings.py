@@ -237,7 +237,7 @@ class SettingsPage(QWidget):
     def _style_json_editor(self) -> None:
         self.json_editor.setStyleSheet(
             f"QPlainTextEdit {{ background: {PANEL2}; color: {TEXT}; border: 1px solid {BORDER};"
-            "border-radius: 6px; font-family: Consolas, monospace; font-size: 12px; }}"
+            "border-radius: 6px; font-family: Consolas, monospace; font-size: 12px; }"
         )
 
     def _toggle_json(self, checked: bool) -> None:

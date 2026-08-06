@@ -11,6 +11,6 @@ class LogPage(QPlainTextEdit):
         self.setMaximumBlockCount(3000)
         self.setStyleSheet(
             f"QPlainTextEdit {{ background: {PANEL}; color: {GRAY}; border: 1px solid {BORDER};"
-            "border-radius: 8px; font-family: Consolas, monospace; font-size: 12px; }}"
+            "border-radius: 8px; font-family: Consolas, monospace; font-size: 12px; }"
         )
 

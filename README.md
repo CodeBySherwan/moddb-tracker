@@ -214,6 +214,18 @@ moddb_tracker/
 - **winotify** for Windows toast notifications
 - **openpyxl / reportlab** for Excel and PDF exports
 
+## Building a standalone exe
+
+```powershell
+.venv\Scripts\pip install pyinstaller
+.venv\Scripts\pyinstaller ModDBTracker.spec --noconfirm
+```
+
+Produces a single windowed `dist\ModDBTracker.exe` (no console) with the `moddb`,
+`curl_cffi`, matplotlib and reportlab stacks bundled. The spec ships a PyInstaller
+runtime hook that neutralises `moddb`'s import-time `inspect.getsource` calls,
+which cannot work inside a frozen app.
+
 ## Notes & troubleshooting
 
 - ModDB sits behind Cloudflare. The app impersonates Chrome via `curl_cffi` and

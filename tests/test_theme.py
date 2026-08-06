@@ -133,6 +133,38 @@ def _fresh_config(tmp_path, theme_name):
     return cfg
 
 
+def test_widget_stylesheets_are_well_formed(app):
+    """Widget-level QSS must not carry an unbalanced extra closing brace.
+
+    Regression: ``log.py``/``settings.py`` concatenated an f-string with a
+    plain string literal, so ``}}`` (f-string escaping) leaked through as two
+    braces in the real QSS, producing "Could not parse stylesheet" warnings on
+    the Windows platform (offscreen Qt tolerated it).
+    """
+    from ui.pages.log import LogPage  # noqa: PLC0415
+
+    lp = LogPage()
+    try:
+        qss = lp.styleSheet()
+    finally:
+        lp.deleteLater()
+    assert qss.count("{") == qss.count("}"), qss
+    assert not qss.rstrip().endswith("}}")
+
+    import copy  # noqa: PLC0415
+
+    import tracker  # noqa: PLC0415
+
+    page = settings_mod.SettingsPage(copy.deepcopy(tracker.DEFAULT_CONFIG))
+    try:
+        page._style_json_editor()
+        qss2 = page.json_editor.styleSheet()
+    finally:
+        page.deleteLater()
+    assert qss2.count("{") == qss2.count("}"), qss2
+    assert not qss2.rstrip().endswith("}}")
+
+
 def test_window_applies_theme_without_restart(tmp_path, app, restore_theme):
     cfg = _fresh_config(tmp_path, "dark")
     sys.argv = ["pytest", "--config", str(cfg)]
