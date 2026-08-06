@@ -683,7 +683,10 @@ class TrackerWindow(QMainWindow):
             removed = reset_app_data(self.config)
             save_config(json.loads(json.dumps(DEFAULT_CONFIG)), self.config_path)
             logger.info("App data reset: %d file(s) removed", len(removed))
-            QProcess.startDetached(sys.executable, [str(Path(__file__).resolve()), "--config", self.config_path])
+            QProcess.startDetached(
+                str(Path(sys.executable).with_name("pythonw.exe")),
+                [str(Path(__file__).resolve().parent.parent / "gui.py"), "--config", self.config_path],
+            )
             QMessageBox.information(
                 self, "Data deleted",
                 f"Removed {len(removed)} file(s). The app is restarting as a fresh first run.",

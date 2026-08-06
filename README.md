@@ -118,10 +118,18 @@ first charts to `output\`.
 ### GUI
 
 ```powershell
+# no console window at all (double-clickable): the launcher uses pythonw
+Start ModDB Tracker.bat
+
+# from a terminal (a terminal window will stay open while the app runs):
 .venv\Scripts\python gui.py
 # start hidden in the system tray:
 .venv\Scripts\python gui.py --minimized
 ```
+
+The bundled `Start ModDB Tracker.bat` launches the app with `pythonw`, so no
+console window appears or flashes. Prefer it over a shortcut that calls
+`python gui.py`, and the Task Scheduler job already runs `pythonw`.
 
 Eleven pages, reachable from the sidebar:
 
