@@ -8,11 +8,14 @@ from ui.theme import ACCENT, BORDER, CARD, FAINT, GRAY, SUCCESS, SURFACE, TEXT, 
 from ui.icons import _icon_label
 from ui.widgets import relative_time
 
-KIND_STYLE = {
-    "download": ("download", SUCCESS),
-    "comment": ("chat", ACCENT),
-    "reply": ("reply", WARNING),
-}
+def _kind_style(kind: str) -> tuple:
+    if kind == "download":
+        return "download", SUCCESS
+    if kind == "comment":
+        return "chat", ACCENT
+    if kind == "reply":
+        return "reply", WARNING
+    return "dot", GRAY
 
 
 def _chip(text: str, color: str) -> QLabel:
@@ -37,7 +40,7 @@ class EventCard(QFrame):
         self._unseen = bool(event.get("seen") is False)
 
         kind = str(event.get("kind") or "download")
-        icon_name, color = KIND_STYLE.get(kind, ("dot", GRAY))
+        icon_name, color = _kind_style(kind)
         self._color = color
         kind_label = {"download": "DOWNLOADS", "comment": "COMMENT", "reply": "REPLY"}.get(kind, kind.upper())
 

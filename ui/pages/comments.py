@@ -8,9 +8,6 @@ from storage import Storage
 from ui.theme import ACCENT, BORDER, CARD, FAINT, GRAY, LINE_COLORS, SURFACE, TEXT, WARNING
 from ui.widgets import relative_time
 
-COMMENT_COLOR = ACCENT
-REPLY_COLOR = WARNING
-
 
 def _avatar(author: str, size: int = 34) -> QLabel:
     """Circular avatar: author's first letter on a hash-picked background."""
@@ -59,7 +56,7 @@ class CommentCard(QFrame):
         self._reply = bool(comment.get("parent_id"))
 
         is_reply = self._reply
-        color = REPLY_COLOR if is_reply else COMMENT_COLOR
+        color = WARNING if is_reply else ACCENT
         chip = "REPLY" if is_reply else "COMMENT"
         self.setStyleSheet(
             f"CommentCard {{ background-color: {CARD}; border: 1px solid {BORDER};"
@@ -103,7 +100,7 @@ class CommentCard(QFrame):
         self.setStyleSheet(
             f"CommentCard {{ background-color: {SURFACE if selected else CARD};"
             f" border: 1px solid {ACCENT if selected else BORDER};"
-            f" border-left: 4px solid {REPLY_COLOR if self._reply else COMMENT_COLOR};"
+            f" border-left: 4px solid {WARNING if self._reply else ACCENT};"
             f" border-radius: 10px; }}"
         )
 

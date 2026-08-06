@@ -47,6 +47,16 @@ def daily_deltas(series: List[Tuple[Date, int]]) -> List[Tuple[Date, int]]:
     return out
 
 
+def snapshot_daily_deltas(storage, mod_id: int) -> List[Tuple[Date, int]]:
+    """Downloads gained per day, derived from poll snapshots (full history).
+
+    ModDB only publishes per-day stats pages for mods, not addons/files, so
+    this is the fallback that keeps the daily-counts chart populated for every
+    item type.
+    """
+    return daily_deltas(daily_series(storage, mod_id, days=100 * 365))
+
+
 def moving_average(series: List[Tuple[Date, int]], window: int = 7) -> List[Tuple[Date, float]]:
     """Trailing-window moving average over deltas, padded with None-free head."""
     out: List[Tuple[Date, float]] = []

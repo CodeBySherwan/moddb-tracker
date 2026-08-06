@@ -6,11 +6,11 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QSplitter, QTabWidget, QVBoxLayout, QWidget
 import analytics
 from storage import Storage
-from ui.theme import ACCENT, SUCCESS, WARNING
+from ui.theme import ACCENT, SUCCESS
 from ui.widgets import PlotCard, fill_table, make_table
 
 class HistoryPage(QWidget):
-    """Backfilled per-day history from the ModDB stats page + poll snapshots."""
+    """Per-day counts (ModDB stats history for mods, poll-derived otherwise) + poll snapshots."""
 
     backfill_requested = pyqtSignal(int)
     backfill_all_requested = pyqtSignal()
@@ -24,9 +24,10 @@ class HistoryPage(QWidget):
         title.setObjectName("PageTitle")
         layout.addWidget(title)
         hint = QLabel(
-            "\u201cModDB stats history\u201d holds the per-day counters backfilled from ModDB's public "
-            "stats page \u2014 a full daily visitor count since release. \u201cPoll snapshots\u201d are the "
-            "rows collected by your polls."
+            "\u201cDaily counts\u201d holds the per-day counters backfilled from ModDB's public stats "
+            "page for mods; for addons/files \u2014 where ModDB publishes no per-day stats \u2014 the "
+            "counts are derived from the download totals recorded by your polls. \u201cPoll snapshots\u201d "
+            "are the rows collected by your polls."
         )
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
@@ -38,11 +39,11 @@ class HistoryPage(QWidget):
         self.mod_combo.currentIndexChanged.connect(lambda _: self._populate())
         controls.addWidget(self.mod_combo, 1)
         self.backfill_btn = QPushButton("Backfill this mod")
-        self.backfill_btn.setToolTip("Fetch the full per-day history from the ModDB stats page")
+        self.backfill_btn.setToolTip("Fetch the full per-day history from the ModDB stats page (mods only)")
         self.backfill_btn.clicked.connect(self._request_backfill)
         controls.addWidget(self.backfill_btn)
         self.backfill_all_btn = QPushButton("Backfill all mods")
-        self.backfill_all_btn.setToolTip("Fetch the stats page for every tracked mod")
+        self.backfill_all_btn.setToolTip("Fetch the stats page for every tracked mod (mods only)")
         self.backfill_all_btn.clicked.connect(self.backfill_all_requested)
         controls.addWidget(self.backfill_all_btn)
         layout.addLayout(controls)
@@ -62,7 +63,7 @@ class HistoryPage(QWidget):
         splitter = QSplitter()
         splitter.setOrientation(Qt.Orientation.Vertical)
         self.plot_full = PlotCard(
-            "Daily counts from ModDB", "Cumulative visits and downloads over the backfilled history"
+            "Daily counts", "Per-day counts from ModDB stats (mods) or derived from your poll snapshots"
         )
         self.plot_full.set_ylabel("count")
         splitter.addWidget(self.plot_full)
@@ -76,7 +77,7 @@ class HistoryPage(QWidget):
         splitter.setStretchFactor(1, 2)
         splitter.setSizes([340, 240])
         v.addWidget(splitter, 1)
-        self.tabs.addTab(stats_tab, "ModDB stats history")
+        self.tabs.addTab(stats_tab, "Daily counts")
 
         snap_tab = QWidget()
         v2 = QVBoxLayout(snap_tab)
@@ -84,10 +85,11 @@ class HistoryPage(QWidget):
         v2.setSpacing(10)
         splitter2 = QSplitter()
         splitter2.setOrientation(Qt.Orientation.Vertical)
-        self.plot_rank = PlotCard("Rank over time", "Lower rank number = higher rank (inverted axis)")
-        self.plot_rank.set_ylabel("rank")
-        self.plot_rank.plot.getPlotItem().getViewBox().invertY(True)
-        splitter2.addWidget(self.plot_rank)
+        self.plot_downloads = PlotCard(
+            "Downloads over time", "Cumulative downloads across poll snapshots"
+        )
+        self.plot_downloads.set_ylabel("downloads")
+        splitter2.addWidget(self.plot_downloads)
         self.table = make_table(
             ["Fetched", "Downloads", "Today", "Delta", "Visits", "Visits today", "Rank", "Watchers"]
         )
@@ -100,6 +102,7 @@ class HistoryPage(QWidget):
 
         layout.addWidget(self.tabs, 1)
         self._storage = None
+        self._stats_headers = ["Day", "Visits", "Downloads", "Videos", "Images", "Articles"]
 
     def refresh(self, storage: Storage) -> None:
         self._storage = storage
@@ -114,11 +117,7 @@ class HistoryPage(QWidget):
                 self.mod_combo.setCurrentIndex(idx)
         self.mod_combo.blockSignals(False)
         self._populate()
-        # default to the tab that actually has data so History never looks empty
-        if any(storage.has_stats_history(int(m["id"])) for m in storage.get_mods(active_only=True)):
-            self.tabs.setCurrentIndex(0)
-        else:
-            self.tabs.setCurrentIndex(1)
+        self.tabs.setCurrentIndex(0)
 
     def _request_backfill(self) -> None:
         mod_id = self.mod_combo.currentData()
@@ -129,38 +128,46 @@ class HistoryPage(QWidget):
         if self._storage is None:
             return
         mod_id = self.mod_combo.currentData()
-        self._populate_stats(mod_id)
+        content_type = self._content_type_for(mod_id)
+        self.backfill_btn.setVisible(content_type == "mod")
+        self._populate_stats(mod_id, content_type)
         self._populate_snapshots(mod_id)
 
-    def _populate_stats(self, mod_id: Optional[int]) -> None:
+    def _content_type_for(self, mod_id: Optional[int]) -> str:
+        if mod_id is None:
+            return "mod"
+        for m in self._storage.get_mods(active_only=True):
+            if int(m["id"]) == int(mod_id):
+                return m["content_type"]
+        return "mod"
+
+    def _populate_stats(self, mod_id: Optional[int], content_type: str) -> None:
         self.plot_full.clear_chart()
+        self.stats_table.setHorizontalHeaderLabels(self._stats_headers)
         if mod_id is None:
             fill_table(self.stats_table, [])
             self.coverage.setText("")
             return
 
         rows = analytics.stats_history_series(self._storage, mod_id)
+        if rows:
+            self._populate_backfilled(mod_id, rows)
+        else:
+            self._populate_snapshot_counts(mod_id, content_type)
+
+    def _populate_backfilled(self, mod_id: int, rows: List[Dict[str, Any]]) -> None:
         fill_table(
             self.stats_table,
             [[r["day"], r["visits"], r["downloads"], r["videos"], r["images"], r["articles"]]
              for r in rows],
         )
-
         coverage = self._storage.stats_history_coverage(mod_id)
-        if not coverage["days"]:
-            self.coverage.setText(
-                "No backfilled history yet \u2014 click \u201cBackfill this mod\u201d to fetch the "
-                "full daily history from ModDB."
-            )
-            return
-
         counts = coverage["counts"]
         self.coverage.setText(
             f"Backfilled: {coverage['days']:,} day(s) ({coverage['first']} \u2192 {coverage['last']}). "
             f"Daily counts \u2014 visits {counts['visits']:,} \u00b7 downloads {counts['downloads']:,} \u00b7 "
             f"videos {counts['videos']:,} \u00b7 images {counts['images']:,} \u00b7 articles {counts['articles']:,}"
         )
-
         visits_cum = analytics.stats_history_cumulative(self._storage, mod_id, "visits")
         downloads_cum = analytics.stats_history_cumulative(self._storage, mod_id, "downloads")
         if visits_cum:
@@ -174,13 +181,46 @@ class HistoryPage(QWidget):
                 ACCENT, width=2, name="Downloads",
             )
 
+    def _populate_snapshot_counts(self, mod_id: int, content_type: str) -> None:
+        totals = analytics.daily_series(self._storage, mod_id, days=100 * 365)
+        gained_by_day = dict(analytics.snapshot_daily_deltas(self._storage, mod_id))
+        self.stats_table.setHorizontalHeaderLabels(["Day", "Gained", "Total"])
+        fill_table(
+            self.stats_table,
+            [[d.isoformat(), gained_by_day.get(d, "-"), t] for d, t in totals],
+        )
+        if not totals:
+            self.coverage.setText("No snapshots yet \u2014 run a poll to start collecting daily counts.")
+            self.plot_full.show_message("No poll snapshots yet")
+            return
+        if content_type == "mod":
+            self.coverage.setText(
+                "No backfilled history yet \u2014 click \u201cBackfill this mod\u201d to fetch the full "
+                "daily history from ModDB. Showing poll-derived daily counts meanwhile."
+            )
+        else:
+            self.coverage.setText(
+                "ModDB doesn\u2019t publish per-day stats for addons/files, so daily counts are derived "
+                "from the download totals recorded by your polls."
+            )
+        gained = [(d, v) for d, v in gained_by_day.items() if v > 0]
+        if gained:
+            self.plot_full.add_bars(
+                [d for d, _ in gained], [v for _, v in gained],
+                SUCCESS, name="Downloads per day",
+            )
+        self.plot_full.add_line(
+            [d for d, _ in totals], [v for _, v in totals],
+            ACCENT, width=2, fill=True, name="Total",
+        )
+
     def _populate_snapshots(self, mod_id: Optional[int]) -> None:
-        self.plot_rank.clear_chart()
+        self.plot_downloads.clear_chart()
         if mod_id is None:
             fill_table(self.table, [])
             return
         rows: List[List[Any]] = []
-        rank_points: List[Any] = []
+        totals: List[Any] = []
         prev_total = None
         for s in self._storage.snapshots_for(mod_id):
             total = s["downloads_total"]
@@ -189,10 +229,10 @@ class HistoryPage(QWidget):
                 delta = max(0, int(total) - int(prev_total))
             prev_total = total
             rank = f"{s['rank'] or '-'}/{s['rank_total'] or '-'}" if s["rank"] is not None else "-"
-            if s["rank"] is not None:
+            if total is not None:
                 try:
                     day = datetime.date.fromisoformat(str(s["fetched_at"])[:10])
-                    rank_points.append((day, int(s["rank"])))
+                    totals.append((day, int(total)))
                 except Exception:  # noqa: BLE001
                     pass
             rows.append([
@@ -206,9 +246,10 @@ class HistoryPage(QWidget):
                 s["watchers"] or 0,
             ])
         fill_table(self.table, rows)
-        if rank_points:
-            self.plot_rank.add_line(
-                [d for d, _ in rank_points], [v for _, v in rank_points],
-                WARNING, width=2, name="Rank",
+        if totals:
+            self.plot_downloads.add_line(
+                [d for d, _ in totals], [v for _, v in totals],
+                ACCENT, width=2, fill=True, name="Downloads",
             )
-
+        else:
+            self.plot_downloads.show_message("No snapshots yet \u2014 run a poll to start collecting data")

@@ -26,6 +26,7 @@ def _cli_config_path() -> str:
 set_theme(str(load_config(_cli_config_path()).get("ui", {}).get("theme", "dark")))
 
 from ui.theme import ACCENT, ERROR, GRAY, QSS, build_qss, current_theme  # noqa: E402
+import ui.theme as theme  # noqa: E402
 from ui.icons import _icon  # noqa: E402
 from ui.widgets import relative_time  # noqa: E402
 
@@ -312,6 +313,7 @@ class TrackerWindow(QMainWindow):
             f"color: {ACCENT}; font-size: 10px; font-weight: 700; background: {ACCENT}22;"
             "padding: 2px 7px; border-radius: 8px;"
         )
+        self.version_badge = version
         brand = QHBoxLayout()
         brand.setSpacing(8)
         brand.addWidget(logo)
@@ -515,8 +517,48 @@ class TrackerWindow(QMainWindow):
         self.mods._config = self.config
         self.analytics._config = self.config
         self.compare._config = self.config
+        self.settings._config = self.config
         self._restart_auto_timer()
+        self._apply_theme()
         self.refresh_all()
+
+    def _apply_theme(self) -> None:
+        name = str(self.config.get("ui", {}).get("theme", "dark"))
+        if name == theme.current_theme_name():
+            return
+        theme.set_theme(name)
+        theme.refresh_bindings()
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(theme.build_qss(theme.current_theme()))
+        self._restyle_persistent_widgets()
+        self._apply_theme_to_widgets()
+
+    def _restyle_persistent_widgets(self) -> None:
+        p = theme.current_theme()
+        self.version_badge.setStyleSheet(
+            f"color: {p['ACCENT']}; font-size: 10px; font-weight: 700; background: {p['ACCENT']}22;"
+            "padding: 2px 7px; border-radius: 8px;"
+        )
+        self.sync_label.setStyleSheet(f"color: {p['GRAY']}; font-size: 12px;")
+        self.bell_btn.setIcon(QIcon(_icon("bell", p["GRAY"], 20)))
+        self.badge.setStyleSheet(
+            f"background: {p['ERROR']}; color: #FFFFFF; font-size: 10px; font-weight: 700;"
+            "border-radius: 9px; padding: 0 5px;"
+        )
+        for i, (_, icon_name) in enumerate(self.NAV):
+            item = self.sidebar.item(i)
+            if item is not None:
+                item.setIcon(QIcon(_icon(icon_name, p["GRAY"], 20)))
+
+    def _apply_theme_to_widgets(self) -> None:
+        for widget in self.findChildren(QWidget):
+            apply_theme = getattr(widget, "apply_theme", None)
+            if callable(apply_theme):
+                try:
+                    apply_theme()
+                except Exception:  # noqa: BLE001
+                    logger.exception("apply_theme failed for %r", widget)
 
     def _upsert_manual_mods(self) -> None:
         """Register config['mods'] URLs immediately (offline) so they show up

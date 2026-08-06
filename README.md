@@ -70,7 +70,7 @@ A single poll also renders shareable PNG reports into `output\` (matplotlib, dar
 - **Compare** — side-by-side view of any two mods.
 - **Search** — cross-data search across mods, comments, events and history.
 - **Reports & export** — CSV, Excel (.xlsx), PDF report and JSON export of everything in the database; one-click chart regeneration.
-- **Light & dark themes**, adjustable font size, sort/filter on the mods page.
+- **Themes** — Dark, Light, Nord, Nord Light, Dracula, Solarized Dark/Light, switchable live from Settings (no restart), plus adjustable font size and sort/filter on the mods page.
 - **Background mode** — polls on a timer with a system tray icon and no console window.
 
 ## Installation
@@ -99,7 +99,7 @@ Everything can be edited in the GUI (**Configuration** page), or by hand in `con
 | `poll.charts_each_poll` | `true` | Regenerate `output\` PNG reports on every poll |
 | `tray.minimize_to_tray` | `true` | Close button hides the window instead of quitting |
 | `tray.start_minimized` | `false` | Start hidden in the tray |
-| `ui.theme` | `light` | `light` or `dark` |
+| `ui.theme` | `dark` | `dark`, `light`, `nord`, `nord-light`, `dracula`, `solarized-dark`, `solarized-light` |
 | `ui.fullscreen` | `false` | Start maximized |
 | `ui.analytics_days` | `60` | Default analytics range |
 | `ui.dashboard.*` | — | Toggle dashboard stat cards, insights, activity feed and its position |
@@ -188,7 +188,7 @@ moddb_tracker/
 ├── moddb/            # ModDB data-source API
 ├── ui/
 │   ├── main_window.py   # window shell, nav, tray, poll thread, exports
-│   ├── theme.py         # light/dark theme palettes
+│   ├── theme.py         # theme palettes + live-switch binding refresh
 │   ├── widgets.py       # cards, PlotCard (zoom/export), tables
 │   └── pages/           # the eleven sidebar pages
 ├── tests/            # pytest smoke tests (run offscreen)

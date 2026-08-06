@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayo
 import pyqtgraph as pg
 import tracker
 from tracker import CONFIG_FILE, load_config, save_config
-from ui.theme import BORDER, PANEL2, TEXT
+from ui.theme import BORDER, DISPLAY_NAMES, PANEL2, TEXT
 from ui.widgets import panel, section_label
 
 class SettingsPage(QWidget):
@@ -135,10 +135,10 @@ class SettingsPage(QWidget):
         ap.setHorizontalSpacing(12)
         ap.addWidget(QLabel("Theme:"), 0, 0)
         self.theme_combo = QComboBox()
-        self.theme_combo.addItem("Dark", "dark")
-        self.theme_combo.addItem("Light", "light")
+        for name, display in DISPLAY_NAMES.items():
+            self.theme_combo.addItem(display, name)
         ap.addWidget(self.theme_combo, 0, 1)
-        ah = QLabel("Restart the app to apply the selected theme.")
+        ah = QLabel("The theme applies immediately, no restart needed.")
         ah.setObjectName("Hint")
         ap.addWidget(ah, 1, 0, 1, 2)
         layout.addWidget(box6b)
@@ -168,10 +168,7 @@ class SettingsPage(QWidget):
         al.addWidget(self.json_toggle)
         self.json_editor = QPlainTextEdit()
         self.json_editor.setMaximumHeight(240)
-        self.json_editor.setStyleSheet(
-            f"QPlainTextEdit {{ background: {PANEL2}; color: {TEXT}; border: 1px solid {BORDER};"
-            "border-radius: 6px; font-family: Consolas, monospace; font-size: 12px; }}"
-        )
+        self._style_json_editor()
         al.addWidget(self.json_editor)
         self.json_editor.hide()
         aj = QHBoxLayout()
@@ -237,6 +234,12 @@ class SettingsPage(QWidget):
         for item in self.mods_list.selectedItems():
             self.mods_list.takeItem(self.mods_list.row(item))
 
+    def _style_json_editor(self) -> None:
+        self.json_editor.setStyleSheet(
+            f"QPlainTextEdit {{ background: {PANEL2}; color: {TEXT}; border: 1px solid {BORDER};"
+            "border-radius: 6px; font-family: Consolas, monospace; font-size: 12px; }}"
+        )
+
     def _toggle_json(self, checked: bool) -> None:
         self.json_editor.setVisible(checked)
         self.apply_json_btn.setVisible(checked)
@@ -267,6 +270,7 @@ class SettingsPage(QWidget):
 
     # ---- data -----------------------------------------------------------
     def reload(self) -> None:
+        self._style_json_editor()
         self.profile.setText(self._config.get("profile_url", ""))
         self.auto_discover.setChecked(bool(self._config.get("auto_discover", True)))
         self.mods_list.clear()

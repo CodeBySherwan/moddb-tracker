@@ -8,7 +8,7 @@ import analytics
 from tracker import CONFIG_FILE, save_config
 from storage import Storage
 from ui.theme import ACCENT, GRAY, SUCCESS
-from ui.icons import INSIGHT_COLORS, INSIGHT_ICONS, _apply_shadow, _icon, _icon_label
+from ui.icons import INSIGHT_ICONS, _apply_shadow, _icon, _icon_label, insight_color
 from ui.widgets import ActivityFeed, StatCard, relative_time
 
 class DashboardPage(QWidget):
@@ -188,7 +188,7 @@ class DashboardPage(QWidget):
             if i < len(insights):
                 kind = insights[i].get("kind", "info")
                 self.insight_icons[i].setPixmap(
-                    _icon(INSIGHT_ICONS.get(kind, "info"), INSIGHT_COLORS.get(kind, ACCENT), 16)
+                    _icon(INSIGHT_ICONS.get(kind, "info"), insight_color(kind), 16)
                 )
                 lab.setText(f"{insights[i]['title']} — {insights[i]['detail']}")
             else:

@@ -347,6 +347,25 @@ class PlotCard(QFrame):
             legend.clear()
         self._series = []
 
+    def show_message(self, text: str) -> None:
+        """Show a centered message instead of chart data (empty state)."""
+        self.clear_chart()
+        item = pg.TextItem(text, color=FAINT, anchor=(0.5, 0.5))
+        item.setZValue(100)
+        self.plot.addItem(item, ignoreBounds=True)
+        self.plot.getPlotItem().getViewBox().setRange(xRange=(-1, 1), yRange=(-1, 1), padding=0)
+
+    def apply_theme(self) -> None:
+        """Re-apply palette colors to the plot background and axes (live theme switch)."""
+        self.plot.setBackground(CARD)
+        legend = self.plot.getPlotItem().legend
+        if legend is not None:
+            legend.setBrush(pg.mkBrush(CARD))
+        for axis_name in ("left", "bottom"):
+            axis = self.plot.getPlotItem().getAxis(axis_name)
+            axis.setPen(pg.mkPen(BORDER))
+            axis.setTextPen(pg.mkPen(FAINT))
+
     def set_ylabel(self, text: str) -> None:
         self.plot.getPlotItem().setLabel("left", text)
 
@@ -465,13 +484,19 @@ class InsightCard(QFrame):
     """Single insight line with a sentiment-colored accent bar."""
 
     KIND_ICON = {"positive": "trend-up", "negative": "warning", "info": "info"}
-    KIND_COLOR = {"positive": SUCCESS, "negative": ERROR, "info": ACCENT}
+
+    def _kind_color(self, kind: str) -> str:
+        if kind == "positive":
+            return SUCCESS
+        if kind == "negative":
+            return ERROR
+        return ACCENT
 
     def __init__(self, insight: Dict[str, Any], parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
         kind = insight.get("kind", "info")
-        color = self.KIND_COLOR.get(kind, ACCENT)
+        color = self._kind_color(kind)
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(16, 12, 16, 12)
@@ -570,11 +595,14 @@ class BadgeCard(QFrame):
 class ActivityFeed(QFrame):
     """Sidebar panel listing recent download / comment events."""
 
-    KIND_STYLE = {
-        "download": ("download", SUCCESS),
-        "comment": ("chat", ACCENT),
-        "reply": ("reply", WARNING),
-    }
+    def _kind_style(self, kind: str) -> tuple:
+        if kind == "download":
+            return "download", SUCCESS
+        if kind == "comment":
+            return "chat", ACCENT
+        if kind == "reply":
+            return "reply", WARNING
+        return "dot", GRAY
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -620,7 +648,7 @@ class ActivityFeed(QFrame):
 
         for event in rows:
             kind = event["kind"] or "download"
-            icon_name, color = self.KIND_STYLE.get(kind, ("dot", GRAY))
+            icon_name, color = self._kind_style(kind)
             row = QFrame()
             row.setObjectName("EventRow")
             h = QHBoxLayout(row)
@@ -773,7 +801,7 @@ class ModCard(QFrame):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("ModCard")
-        self.setFixedHeight(148)
+        self.setFixedHeight(230)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._url = ""
         self._name_id = ""
@@ -794,7 +822,7 @@ class ModCard(QFrame):
         lay.setContentsMargins(16, 12, 16, 12)
         lay.setSpacing(6)
 
-        # header: badge + name + favorite star
+        # header: badge + name (wraps to 2 lines) + favorite star
         self._badge = QLabel("MOD")
         self._badge.setFixedSize(54, 20)
         self._badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -803,6 +831,7 @@ class ModCard(QFrame):
         )
         self._name = QLabel()
         self._name.setStyleSheet("font-size: 14px; font-weight: 700;")
+        self._name.setWordWrap(True)
         self._name.setToolTip("")
         self._full_name = ""
         self._star = QToolButton()
@@ -812,7 +841,7 @@ class ModCard(QFrame):
         self._star.clicked.connect(self._toggle_favorite)
         header = QHBoxLayout()
         header.setSpacing(8)
-        header.addWidget(self._badge)
+        header.addWidget(self._badge, 0, Qt.AlignmentFlag.AlignTop)
         header.addWidget(self._name, 1)
         self._pending = QLabel("Not yet polled")
         self._pending.setStyleSheet(
@@ -820,46 +849,52 @@ class ModCard(QFrame):
             " letter-spacing: 1px; border-radius: 4px; padding: 2px 7px; border: none;"
         )
         self._pending.setVisible(False)
-        header.addWidget(self._pending)
-        header.addWidget(self._star)
+        header.addWidget(self._pending, 0, Qt.AlignmentFlag.AlignTop)
+        header.addWidget(self._star, 0, Qt.AlignmentFlag.AlignTop)
         lay.addLayout(header)
 
-        # numbers
+        # downloads + growth
         self._dl = QLabel("—")
         self._dl.setObjectName("StatValue")
-        self._dl.setStyleSheet("font-size: 20px;")
+        self._dl.setStyleSheet("font-size: 24px;")
         self._dl_cap = QLabel("DOWNLOADS")
         self._dl_cap.setObjectName("StatCaption")
-        num_col = QVBoxLayout()
-        num_col.setSpacing(0)
-        num_col.addWidget(self._dl)
-        num_col.addWidget(self._dl_cap)
+        dl_col = QVBoxLayout()
+        dl_col.setSpacing(0)
+        dl_col.addWidget(self._dl)
+        dl_col.addWidget(self._dl_cap)
         self._growth = QLabel("")
         self._growth.setStyleSheet(f"color: {SUCCESS}; font-size: 12px; font-weight: 600;")
-        self._meta = QLabel("")
-        self._meta.setStyleSheet(f"color: {GRAY}; font-size: 12px;")
-        right_col = QVBoxLayout()
-        right_col.setSpacing(3)
-        right_col.addStretch(1)
-        right_col.addWidget(self._growth)
-        right_col.addWidget(self._meta)
-        numbers = QHBoxLayout()
-        numbers.setSpacing(20)
-        numbers.addLayout(num_col)
-        numbers.addLayout(right_col, 1)
-        lay.addLayout(numbers)
+        stats = QHBoxLayout()
+        stats.setSpacing(12)
+        stats.addLayout(dl_col)
+        stats.addStretch(1)
+        stats.addWidget(self._growth, 0, Qt.AlignmentFlag.AlignBottom)
+        lay.addLayout(stats)
+
+        # detail lines (each wraps to fit the card width)
+        self._meta1 = QLabel("")
+        self._meta2 = QLabel("")
+        for meta in (self._meta1, self._meta2):
+            meta.setStyleSheet(f"color: {GRAY}; font-size: 12px; background: transparent; border: none;")
+            lay.addWidget(meta)
 
         # footer: updated stamp + actions
+        self._stamp_full = ""
         self._stamp = QLabel("")
         self._stamp.setStyleSheet(f"color: {FAINT}; font-size: 11px;")
+        self._stamp.setMaximumWidth(120)
         self._details_btn = QPushButton("Details")
+        self._details_btn.setObjectName("CardAction")
         self._details_btn.clicked.connect(self._show_details)
         self._open_btn = QPushButton("Open")
+        self._open_btn.setObjectName("CardAction")
         self._open_btn.clicked.connect(lambda: self.open_requested.emit(self._url))
         self._refresh_btn = QPushButton("Refresh")
+        self._refresh_btn.setObjectName("CardAction")
         self._refresh_btn.clicked.connect(lambda: self.refresh_requested.emit(self._mod_id))
         footer = QHBoxLayout()
-        footer.setSpacing(8)
+        footer.setSpacing(6)
         footer.addWidget(self._stamp)
         footer.addStretch(1)
         footer.addWidget(self._details_btn)
@@ -904,7 +939,6 @@ class ModCard(QFrame):
         self._name.setText(name)
         self._full_name = name
         self._name.setToolTip(name)
-        self._refresh_name_elide()
 
         raw_total = totals.get("downloads_total")
         self.downloads_total = int(raw_total) if raw_total is not None else 0
@@ -919,16 +953,19 @@ class ModCard(QFrame):
         else:
             self._growth.setText("— no change this week")
             self._growth.setStyleSheet(f"color: {GRAY}; font-size: 12px;")
+
         rank = totals.get("rank")
-        parts = []
+        detail1 = []
         if rank is not None:
-            parts.append(f"Rank {rank}{'/' + str(totals['rank_total']) if totals.get('rank_total') else ''}")
-        parts.append(f"Watchers {format_num(totals.get('watchers'))}")
-        parts.append(f"Visits {format_num(totals.get('visits'))}")
-        parts.append(f"Comments {totals.get('comments', 0)}")
-        parts.append(f"Replies {totals.get('replies', 0)}")
-        self._meta.setText(" · ".join(parts))
-        self._stamp.setText(f"Updated {relative_time(updated)}" if updated else "")
+            detail1.append(f"Rank {rank}" + (f"/{totals['rank_total']}" if totals.get("rank_total") else ""))
+        detail1.append(f"Watchers {format_num(totals.get('watchers'))}")
+        self._meta1.setText(" · ".join(detail1))
+        self._meta2.setText(
+            f"Visits {format_num(totals.get('visits'))} · Comments {totals.get('comments', 0)}"
+            f" · Replies {totals.get('replies', 0)}"
+        )
+        self._stamp_full = f"Updated {relative_time(updated)}" if updated else ""
+        self._update_stamp()
 
         star = "★" if self._favorite else "☆"
         self._star.setText(star)
@@ -939,6 +976,13 @@ class ModCard(QFrame):
             f" color: {color}; }}" + hover
         )
 
+    def _update_stamp(self) -> None:
+        if not self._stamp_full:
+            self._stamp.setText("")
+            return
+        width = self._stamp.width() or self._stamp.maximumWidth()
+        self._stamp.setText(self._stamp.fontMetrics().elidedText(self._stamp_full, Qt.TextElideMode.ElideRight, width))
+
     def matches(self, text: str) -> bool:
         needle = text.strip().lower()
         if not needle:
@@ -948,15 +992,13 @@ class ModCard(QFrame):
 
     # ---- actions --------------------------------------------------------
     def _refresh_name_elide(self) -> None:
-        if not self._full_name:
-            return
-        fm = self._name.fontMetrics()
-        available = max(60, self._name.width())
-        self._name.setText(fm.elidedText(self._full_name, Qt.TextElideMode.ElideRight, available))
+        if self._full_name:
+            self._name.setText(self._full_name)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._refresh_name_elide()
+        self._update_stamp()
 
     def _toggle_favorite(self) -> None:
         self._favorite = not self._favorite

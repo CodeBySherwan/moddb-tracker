@@ -9,7 +9,7 @@ from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import QGraphicsDropShadowEffect, QLabel, QWidget
 
-from ui.theme import ACCENT, ERROR, SUCCESS
+from ui.theme import current_theme
 
 
 _ICON_CACHE: Dict[Tuple[str, str, int], QPixmap] = {}
@@ -449,4 +449,13 @@ _ICON_DRAW: Dict[str, Callable[[QPainter, QRectF], None]] = {
 }
 
 INSIGHT_ICONS = {"positive": "trend-up", "negative": "warning", "info": "info"}
-INSIGHT_COLORS = {"positive": SUCCESS, "negative": ERROR, "info": ACCENT}
+
+
+def insight_color(kind: str) -> str:
+    """Resolve the sentiment color from the *active* theme at call time."""
+    pal = current_theme()
+    if kind == "positive":
+        return pal["SUCCESS"]
+    if kind == "negative":
+        return pal["ERROR"]
+    return pal["ACCENT"]

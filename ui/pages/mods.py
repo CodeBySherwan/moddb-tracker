@@ -200,7 +200,8 @@ class ModsPage(QWidget):
         else:
             key = lambda c: (not c._favorite, _card_downloads(c))
         self._cards.sort(key=key, reverse=(self._sort in (0, 1, 2, 4)))
-        self.flow.clear()
+        while self.flow.count():
+            self.flow.takeAt(0)
         for card in self._cards:
             self.flow.add_card(card)
 

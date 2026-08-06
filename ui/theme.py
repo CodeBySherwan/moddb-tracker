@@ -49,16 +49,132 @@ LIGHT: Dict[str, str] = {
     "line_colors": ["#2563EB", "#16A34A", "#D97706", "#7C3AED", "#0284C7", "#DB2777", "#EA580C", "#0D9488"],
 }
 
-THEMES: Dict[str, Dict[str, str]] = {"dark": DARK, "light": LIGHT}
+NORD: Dict[str, str] = {
+    "BG": "#2E3440",
+    "CARD": "#3B4252",
+    "PANEL": "#3B4252",
+    "PANEL2": "#434C5E",
+    "SURFACE": "#4C566A",
+    "BORDER": "#434C5E",
+    "TEXT": "#ECEFF4",
+    "GRAY": "#D8DEE9",
+    "FAINT": "#7B88A1",
+    "ACCENT": "#5E81AC",
+    "ACCENT_DARK": "#4C6A94",
+    "SUCCESS": "#A3BE8C",
+    "WARNING": "#EBCB8B",
+    "ERROR": "#BF616A",
+    "line_colors": ["#8FBCBB", "#81A1C1", "#A3BE8C", "#D08770", "#B48EAD", "#88C0D0", "#EBCB8B", "#BF616A"],
+}
+
+NORD_LIGHT: Dict[str, str] = {
+    "BG": "#ECEFF4",
+    "CARD": "#FFFFFF",
+    "PANEL": "#FFFFFF",
+    "PANEL2": "#E5E9F0",
+    "SURFACE": "#E5E9F0",
+    "BORDER": "#D8DEE9",
+    "TEXT": "#2E3440",
+    "GRAY": "#4C566A",
+    "FAINT": "#7B88A1",
+    "ACCENT": "#5E81AC",
+    "ACCENT_DARK": "#4C6A94",
+    "SUCCESS": "#4F7A45",
+    "WARNING": "#A2760E",
+    "ERROR": "#BF616A",
+    "line_colors": ["#3B6EA5", "#2F7A4D", "#9A6B00", "#B44E8C", "#6C56C8", "#0E7E93", "#B0560E", "#BF3A42"],
+}
+
+DRACULA: Dict[str, str] = {
+    "BG": "#282A36",
+    "CARD": "#21222C",
+    "PANEL": "#21222C",
+    "PANEL2": "#343746",
+    "SURFACE": "#44475A",
+    "BORDER": "#44475A",
+    "TEXT": "#F8F8F2",
+    "GRAY": "#6272A4",
+    "FAINT": "#53566F",
+    "ACCENT": "#6272A4",
+    "ACCENT_DARK": "#4B5A8A",
+    "SUCCESS": "#50FA7B",
+    "WARNING": "#F1FA8C",
+    "ERROR": "#FF5555",
+    "line_colors": ["#BD93F9", "#50FA7B", "#FFB86C", "#FF79C6", "#8BE9FD", "#F1FA8C", "#FF5555", "#6272A4"],
+}
+
+SOLARIZED_DARK: Dict[str, str] = {
+    "BG": "#002B36",
+    "CARD": "#073642",
+    "PANEL": "#073642",
+    "PANEL2": "#0A3A46",
+    "SURFACE": "#0E4654",
+    "BORDER": "#586E75",
+    "TEXT": "#EEE8D5",
+    "GRAY": "#93A1A1",
+    "FAINT": "#657B83",
+    "ACCENT": "#268BD2",
+    "ACCENT_DARK": "#1D6FA8",
+    "SUCCESS": "#859900",
+    "WARNING": "#B58900",
+    "ERROR": "#DC322F",
+    "line_colors": ["#268BD2", "#859900", "#B58900", "#D33682", "#6C71C4", "#2AA198", "#CB4B16", "#DC322F"],
+}
+
+SOLARIZED_LIGHT: Dict[str, str] = {
+    "BG": "#FDF6E3",
+    "CARD": "#FFFFFF",
+    "PANEL": "#FFFFFF",
+    "PANEL2": "#E7E0CB",
+    "SURFACE": "#F0EAD7",
+    "BORDER": "#93A1A1",
+    "TEXT": "#002B36",
+    "GRAY": "#586E75",
+    "FAINT": "#93A1A1",
+    "ACCENT": "#268BD2",
+    "ACCENT_DARK": "#1D6FA8",
+    "SUCCESS": "#5A7D00",
+    "WARNING": "#A06E00",
+    "ERROR": "#DC322F",
+    "line_colors": ["#1D6FA8", "#5A7D00", "#A06E00", "#C1285F", "#5C64C0", "#177D92", "#A8420F", "#C0262E"],
+}
+
+THEMES: Dict[str, Dict[str, str]] = {
+    "dark": DARK,
+    "light": LIGHT,
+    "nord": NORD,
+    "nord-light": NORD_LIGHT,
+    "dracula": DRACULA,
+    "solarized-dark": SOLARIZED_DARK,
+    "solarized-light": SOLARIZED_LIGHT,
+}
+
+DISPLAY_NAMES: Dict[str, str] = {
+    "dark": "Dark",
+    "light": "Light",
+    "nord": "Nord",
+    "nord-light": "Nord Light",
+    "dracula": "Dracula",
+    "solarized-dark": "Solarized Dark",
+    "solarized-light": "Solarized Light",
+}
 
 _ACTIVE_NAME = "dark"
+
+# Names captured with ``from ui.theme import X`` that refresh_bindings() keeps
+# in sync across already-imported modules after a live theme switch.
+_REBIND_KEYS: tuple = tuple(DARK.keys()) + ("LINE_COLORS", "QSS")
+
+# Modules that define their own constants with the same names (e.g. the
+# matplotlib export charts stay dark) and must not be touched.
+_SKIP_MODULES = {"charts"}
 
 
 # --------------------------------------------------------------------------
 # theme selection
 # --------------------------------------------------------------------------
 def set_theme(name: str) -> None:
-    """Select the active palette by name (must happen before UI imports)."""
+    """Select the active palette by name (applies live, no restart needed)."""
     global _ACTIVE_NAME
     if name not in THEMES:
         name = "dark"
@@ -157,6 +273,13 @@ QPushButton#Primary {{
 QPushButton#Primary:hover {{ background-color: {ACCENT_DARK}; }}
 QPushButton#Primary:disabled {{ background-color: {PANEL2}; color: {FAINT}; }}
 QPushButton#Danger:hover {{ border-color: {ERROR}; color: {ERROR}; }}
+
+QPushButton#CardAction {{
+    padding: 3px 9px;
+    font-size: 12px;
+    border-radius: 6px;
+}}
+QPushButton#CardAction:hover {{ border-color: {ACCENT}; background-color: {SURFACE}; }}
 
 QToolButton {{
     background: transparent;
@@ -377,3 +500,58 @@ def __getattr__(name: str) -> Any:
     if name in current_theme():
         return current_theme()[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# --------------------------------------------------------------------------
+# live theme switching
+# --------------------------------------------------------------------------
+_ALL_COLOR_VALUES = {v for pal in THEMES.values() for v in pal.values() if isinstance(v, str)}
+
+
+def _is_theme_value(name: str, value: Any) -> bool:
+    """True when a module global captured the current theme's value for `name`."""
+    if name == "QSS":
+        return isinstance(value, str) and any(value == build_qss(pal) for pal in THEMES.values())
+    if name == "LINE_COLORS":
+        return isinstance(value, list) and any(value == pal.get("line_colors") for pal in THEMES.values())
+    return isinstance(value, str) and value in _ALL_COLOR_VALUES
+
+
+def _active_value(name: str, active: Dict[str, str]) -> Any:
+    if name == "QSS":
+        return build_qss(active)
+    if name == "LINE_COLORS":
+        return list(active.get("line_colors", DARK["line_colors"]))
+    return active[name]
+
+
+def refresh_bindings() -> None:
+    """Rebind palette colors that modules captured with ``from ui.theme import X``.
+
+    ``from ui.theme import ACCENT`` snapshots the value at import time, so a
+    theme change would otherwise leave every already-loaded module stale. This
+    walks all imported modules and re-assigns those globals (plus the derived
+    ``LINE_COLORS`` / ``QSS``) to the active palette, so the next widget
+    rebuild picks up the new colors with no restart.
+    """
+    import sys  # noqa: PLC0415
+
+    active = current_theme()
+    for mod in tuple(sys.modules.values()):
+        mod_name = getattr(mod, "__name__", "")
+        if mod is None or mod_name == __name__ or mod_name in _SKIP_MODULES:
+            continue
+        ns = vars(mod)
+        for key in _REBIND_KEYS:
+            if key in ns and _is_theme_value(key, ns[key]):
+                ns[key] = _active_value(key, active)
+    _rebuild_derived()
+
+
+def _rebuild_derived() -> None:
+    """Refresh cached structures in other modules that were derived at import time."""
+    try:
+        import ui.icons as icons_mod  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return
+    icons_mod._ICON_CACHE.clear()

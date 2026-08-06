@@ -13,6 +13,7 @@ from analytics import (
     milestones,
     mod_summary,
     moving_average,
+    snapshot_daily_deltas,
     weekly_deltas,
 )
 
@@ -74,6 +75,23 @@ def test_weekly_deltas_groups_by_week_start():
     got = dict(weekly_deltas(series))
     assert got[monday] == 50
     assert got[_d(monday, 7)] == 50
+
+
+def test_snapshot_daily_deltas_derived_from_polls():
+    """Addon/file items have no ModDB stats page, so daily counts must come
+    from the download totals recorded by each poll."""
+    start_day = datetime.date.today() - datetime.timedelta(days=2)
+    rows = [
+        {"fetched_at": _d(start_day, 0).isoformat(), "downloads_total": 100},
+        {"fetched_at": _d(start_day, 1).isoformat(), "downloads_total": 150},
+        {"fetched_at": _d(start_day, 2).isoformat(), "downloads_total": 140},
+    ]
+    got = snapshot_daily_deltas(_FakeSnapshots(rows), 1)
+    assert got == [(_d(start_day, 1), 50), (_d(start_day, 2), 0)]
+
+
+def test_snapshot_daily_deltas_empty():
+    assert snapshot_daily_deltas(_FakeSnapshots([]), 1) == []
 
 
 class _FakeSnapshots:
