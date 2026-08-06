@@ -1,5 +1,7 @@
 # runtime data
 tracker.db
+moddb_tracker.db
+moddb_tracker_export.json
 output/
 logs/
 config.json
